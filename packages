@@ -1,7 +1,7 @@
 # list of packages to be installed
 #
 [debian]   
-	unzip tar gzip wget curl git cmake
+	unzip tar gzip wget curl git cmake xclip
 	python3 python3-pip python3-venv
 
 	luarocks/3.0
