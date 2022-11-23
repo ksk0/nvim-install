@@ -12,12 +12,13 @@ FAILED_PACKAGES=()
 NEOVIM_DOWNLOAD_URL="https://github.com/neovim/neovim/releases/latest/download"
 
 __NVIM_SHARE=$HOME/.local/share/nvim
+__NVIM_BRICKS=$__NVIM_SHARE/bricks
 
-__PERL_HOME=$__NVIM_SHARE/perl5
-__NODE_HOME=$__NVIM_SHARE/node
-__CARGO_HOME=$__NVIM_SHARE/cargo
-__PYTHON_HOME=$__NVIM_SHARE/python
-__LUA_HOME=$__NVIM_SHARE/lua
+__PERL_HOME=$__NVIM_BRICKS/perl5
+__NODE_HOME=$__NVIM_BRICKS/node
+__CARGO_HOME=$__NVIM_BRICKS/cargo
+__PYTHON_HOME=$__NVIM_BRICKS/python
+__LUA_HOME=$__NVIM_BRICKS/lua
 
 __PERL_LIB=$__PERL_HOME/lib/perl5
 __CARGO_BIN=$__CARGO_HOME/bin
