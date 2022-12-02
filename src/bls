@@ -1,0 +1,4398 @@
+#!/usr/bin/zsh
+
+autoload -U regexp-replace
+
+
+###############################################
+# Backup/restore:
+#   Copy /etc/fstab to backup and use it
+#   to remount directories (under some  other
+#   root directory)
+#
+
+
+###############################################
+# depends:
+#   zsh
+#   pv
+#   pigz
+#   cifs-utils
+#   samba-common
+#   smbclient
+#   nmap
+#   mdadm
+#   perl
+#
+
+SAMBA_MOUNT=/mnt/bls-samba
+MDADM_CONF=/etc/mdadm/mdadm.conf
+
+BLS_CONFIG=/etc/bls.conf
+BLS_LOCK=/run/bls.lock
+BLS_FSTAB=/etc/fstab
+BLS_RESTORE_DIR=/mnt/bls-restore
+BLS_LAST_MOUNTS=""
+BLS_TAG=$SAMBA_MOUNT/.bls_backup_share
+CHECK_FOR_FAILES=1
+
+
+
+###############################################
+# trap, init & exit functions
+#
+TRAPEXIT(){
+	{
+		echo -n '[0m'
+		tput cnorm
+		[[ -t 0 ]] && stty echo
+	} >/dev/tty
+
+	[[ -n $__ZPROGRESS_RUNNER_PID ]] && kill -9 $__ZPROGRESS_RUNNER_PID
+
+    [[ $NO_TRAP_EXIT -eq 1 ]] && return
+
+	[[ -n $BLS_LOCK ]] && rm -f $BLS_LOCK
+	[[ -z $BLS_LOCK ]] && echo && return
+	[[ -n $BLS_LAST_MOUNTS ]] && rm $BLS_LAST_MOUNTS
+
+	umount_chroot_resources
+	umount_devices
+
+	if [[ -n $BLS_RESTORE_DIR ]] && [[ -d $BLS_RESTORE_DIR ]]; then
+		cd
+		ERROR_MESSAGE=$(
+			rmdir  $BLS_RESTORE_DIR 2>&1 &
+			zprogress wait $! "Removing restore dir"
+		)
+
+		if [[ -n $ERROR_MESSAGE ]]; then
+			cat <<-EOF | print_box
+				We failed to remove directory.
+				manually remove directory!
+			EOF
+
+			print_off "${color_yellow}Directory: ${color_none}${BLS_RESTORE_DIR}"
+			print_off "${color_yellow}Error msg: ${color_none}${${ERROR_MESSAGE##*: }%.}"
+			echo
+			echo
+		fi
+	fi
+
+	if [[ -n $SAMBA_MOUNT ]] && [[ -d $SAMBA_MOUNT ]]; then
+		remove_failed_backups
+
+		if ! unmount_smb_share; then
+			cat <<-EOF | print_box
+				We failed to unmount samba share!
+				Manually unmount directory!
+			EOF
+
+			print_off "${color_yellow}Directory: ${color_none}${SAMBA_MOUNT}"
+			print_off "${color_yellow}Error msg: ${color_none}${${ERROR_MESSAGE##*: }%.}"
+			echo
+			echo
+		elif [[ -d $SAMBA_MOUNT ]]; then
+			cd
+			ERROR_MESSAGE=$(
+				rmdir  $SAMBA_MOUNT 2>&1 &
+				zprogress wait $! "Removing samba mount dir"
+			)
+
+			if [[ -n $ERROR_MESSAGE ]]; then
+				cat <<-EOF | print_box
+					We failed to remove directory.
+					Manually remove directory!
+				EOF
+
+				print_off "${color_yellow}Directory: ${color_none}${SAMBA_MOUNT}"
+				print_off "${color_yellow}Error msg: ${color_none}${${ERROR_MESSAGE##*: }%.}"
+				echo
+				echo
+			else
+				echo
+			fi
+		fi
+	fi >&2
+
+	echo >/dev/tty
+}
+
+TRAPINT(){
+	local cpos=($(zterm cursor position))
+	echo
+	[[ $cpos[1] -ne 1 ]] && echo
+
+	return $((128 + $1))
+}
+
+bls_init(){
+	# define ansi colors
+	#
+	color_d='[30m'   # dark   (black)
+	color_r='[31m'   # red
+	color_g='[32m'   # green
+	color_y='[33m'   # yellow
+	color_b='[34m'   # blue
+	color_m='[35m'   # magenta
+	color_c='[36m'   # cyan
+	color_w='[37m'   # white
+	color_s='[90m'   # silver (gray)
+	color_n='[0m'    # none
+
+	move_up='[1A'
+
+	# open info channel
+	#
+	exec 3> /dev/tty
+
+	zterm init
+	zmenu init
+}
+
+get_run_mode(){
+	local is_container=$(cat /proc/1/cgroup | tail -1 | grep "container")
+
+	if [[ -n $is_container ]]; then
+		BLS_RUN_MODE='container'
+	else
+		local root_fs=$(df ~ | tail -1 | awk '{print $1;}')
+		local block_dev=$(lsblk -e 7 -no PATH | grep -E "^${root_fs}$")
+
+		if [[ -n $block_dev ]]; then
+			if [[ "$(stat -c %d:%i /)" != "$(stat -c %d:%i /proc/1/root/.)" ]]; then
+				BLS_RUN_MODE='chroot'
+			else
+				BLS_RUN_MODE='system'
+			fi
+		else
+			BLS_RUN_MODE='rescue'
+		fi
+	fi
+}
+
+
+
+###############################################
+# exec commands
+#
+exec_help(){
+	cat <<-EOF
+
+		   bls - Backup Linux System
+		   -------------------------------------------------------
+
+		   synopsis:
+		      usage: bls command
+
+		   commands:
+		      info          - show extended info on command usage
+
+		      backup [task] - run backup for 'task'
+		      restore       - restore system from backup
+		      list          - list backups on selected share
+		      delete        - delete backups from server/share
+
+		      chroot        - chroot to restored system
+		      mount         - mount selected samba share
+		      tag           - tag selected samba share as backup
+		                      storage
+
+		   options:
+		      -t            - dry run, only list files which would
+		                      be backed up
+		      -L LEVEL      - level of directory and file tree pre-
+		                      sentation on dry run
+
+	EOF
+
+	NO_TRAP_EXIT=1
+}
+
+exec_info(){
+	cat <<-EOF |
+		__BLS_INFO_FILE__
+	EOF
+	base64 -d  | less -RFX
+}
+
+exec_backup(){
+
+	run_as_root
+	check_for_bls_instance
+	get_run_mode
+
+	if [[ $BLS_RUN_MODE = rescue ]]; then
+		cat <<-EOF | print_box --align=left
+			  You  are  runing  Linux from rescue CD. You can't
+			  make backups. Only restore of system is possible.
+
+			  Exiting ...
+		EOF
+
+		exit 1
+
+	elif [[ $BLS_RUN_MODE = chroot ]]; then
+		cat <<-EOF | print_box --align=left
+			  You are in chrooted system. You can't make backup.
+			  Only restore of 'data' is posible.
+
+			  Exiting ...
+		EOF
+
+		exit 1
+	fi
+
+	clear; echo
+
+	check_config_file
+	free_samba_mount
+
+	if [[ -n $1 ]]; then
+		BLS_TASK=$1
+	else
+		select_task
+	fi
+
+	load_task
+
+	[[ $BLS_CONFIG_TYPE = system ]] && check_efi_partitions backup
+
+	echo
+	run_backup
+}
+
+exec_restore(){
+	run_as_root
+	check_for_bls_instance
+	get_run_mode
+
+	clear;echo
+
+	free_samba_mount
+	free_restore_mounts
+
+	select_smb_server
+	select_smb_share
+
+	mount_smb_share
+	remove_failed_backups
+
+	select_backup_host
+	select_backup_restore
+
+	# ######################################3
+	# check if  all files present
+	# ######################################3
+	# echo
+	# echo "   $BLS_RESTORE"
+	# echo
+
+	confirm_restore
+	run_restore
+}
+
+exec_list(){
+	run_as_root
+	check_for_bls_instance
+
+	clear; echo
+
+	free_samba_mount
+	select_smb_server
+	select_smb_share
+
+	mount_smb_share
+	remove_failed_backups
+
+	select_backup_host all
+
+	echo
+	local backups=("${(@f)$(
+		get_list_of_backups &
+
+		zprogress wait $! "Creating list of backups"
+	)}")
+
+	if [[ -z $backups ]]; then
+		print_box "There are no backups on selected server/share!"
+
+		exit 1
+	fi
+
+	local void
+	local menu_prompt=""
+
+	menu_prompt+="[${color_g}ENTER: ${color_n}exit] "
+	menu_prompt+="[${color_g}CTRL+C: ${color_n}exit]"
+
+	clear; echo
+
+	echo
+	zmenu select void\
+		--focus 1 \
+		--color 'b c b g b c c b' \
+		--align "r l l c r l" \
+		--spaces "1 2 ' [' '] ' ' [' 1 '] ' 2" \
+		--no-bottom-line \
+		--title "${color_y}List of backups on: ${color_n}${SAMBA_SERVER}" \
+		--prompt "$menu_prompt" \
+		$backups
+
+	echo
+	echo
+	show_backup_storage_usage
+	echo
+
+	unmount_smb_share
+
+}
+
+exec_delete(){
+	run_as_root
+	check_for_bls_instance
+
+	clear; echo
+
+	free_samba_mount
+	select_smb_server
+	select_smb_share
+
+	echo
+	mount_smb_share
+	remove_failed_backups
+
+	local selected
+	select_backup_delete selected
+
+	if [[ -z $selected ]]; then
+		echo
+		echo
+		print_box "You have not selected any backup for deletion!"
+		echo
+
+		exit 1
+	fi
+
+
+	local deleted 
+	delete_backups deleted $selected
+
+	if [[ -z $deleted ]]; then
+		echo
+		print_box "No backups were deleted!"
+		echo
+
+		exit 1
+	fi
+
+	clear; echo
+
+	echo
+	zmenu print \
+		--no-bottom-line \
+		--title "${color_y}Following backups were deleted:${color_n}" \
+		--focus 0 \
+		--width 57  \
+		--align "r l l c r l" \
+		--color "b c c g b c c b" \
+		--spaces "1 2 ' [' '] ' ' [' 1 '] ' 2" \
+		$deleted
+
+	echo
+	echo
+	show_backup_storage_usage
+	echo
+
+	unmount_smb_share
+
+}
+
+exec_mount(){
+	run_as_root
+	check_for_bls_instance
+
+	echo
+	free_samba_mount
+	select_smb_server
+	select_smb_share
+	mount_smb_share
+
+
+	cat <<-EOF | print_box --align=center
+		Samba share has been mounted on $SAMBA_MOUNT!
+		After usage unmount samba share manualy!
+	EOF
+
+	print_off "${color_y}Server: ${color_n}$SAMBA_SERVER"
+	print_off "${color_y}Share:  ${color_n}$SAMBA_SHARE"
+
+	SAMBA_MOUNT=""
+}
+
+exec_chroot(){
+	run_as_root
+	check_for_bls_instance
+	get_run_mode
+
+
+	if [[ $BLS_RUN_MODE != rescue ]]; then
+		print_box "You can only run 'bls chroot' from liveCD!"
+		echo 
+
+		exit 1
+	fi
+
+	local restore_mounts=/mnt/.bls-mounts
+
+	if [[ ! -f $restore_mounts ]]; then
+		cat <<-EOF | print_box --align=left
+			  You can only run 'bls chroot' after succesfull
+			  restore of system. Stamp file indicating succ-
+			  esfull restore has not been found!
+
+			  Exiting ...
+		EOF
+		echo
+
+		exit 1
+	fi
+
+
+	typeset -gA BLS_RESTORE_MOUNTS=("${(@f)$(cat $restore_mounts)}")
+
+	echo
+	mount_restore_devices
+	mount_chroot_resources
+
+	cp /usr/local/bin/bls $BLS_RESTORE_DIR/usr/local/bin/
+	clear
+
+	chroot $BLS_RESTORE_DIR
+	echo
+}
+
+exec_tag(){
+	run_as_root
+	check_for_bls_instance
+
+	echo
+	free_samba_mount
+	select_smb_server
+	select_smb_share
+
+	mount_smb_share
+	CHECK_FOR_FAILES=0
+
+	tag_smb_share
+}
+
+exec_test(){
+	# SAMBA_IP=192.168.30.50
+	# SAMBA_SERVER=maestral-backup
+	# SAMBA_SHARE=backup
+	# SAMBA_LOGIN=""
+	# SAMBA_PASSWD=""
+
+	exec_list "$@"
+	# exec_backup "$@"
+	# exec_restore "$@"
+	# exec_list "$@"
+}
+
+
+
+###############################################
+# backup/restore functions
+#
+run_backup(){
+	if [[ $BLS_CONFIG_TYPE = system ]]; then
+		backup_system
+	else
+		backup_data
+	fi
+}
+
+run_restore(){
+
+	local task=$(cat $BLS_RESTORE/.bls-backup)
+
+	if [[ $task =~ "^system" ]]; then
+		restore_system
+	else
+		restore_data
+	fi
+
+}
+
+confirm_restore(){
+	local host="${${BLS_RESTORE/#${SAMBA_MOUNT}\/}//%\/*}"
+	local time="${${BLS_RESTORE/#${SAMBA_MOUNT}\/}/#*\/}"
+	local desc=$(head -1 $BLS_RESTORE/.description)
+	local b_type=$(cat $BLS_RESTORE/.bls-backup)
+	time=${${time/_/ }/x/:}
+
+	echo
+	echo
+	print_off "${color_b}You have selected following backup:${color_n}"
+	print_off "${color_y}--------------------------------------${color_n}"
+	print_off "${color_y}Server: ${color_n}${SAMBA_SERVER}"
+	print_off "${color_y}Share:  ${color_n}${SAMBA_SHARE}"
+	echo
+	print_off "${color_y}System name: ${color_n}${host}"
+	print_off "${color_y}Backup time: ${color_n}${time}"
+	print_off "${color_y}Description: ${color_n}${desc}"
+	print_off "${color_y}Backup type: ${color_n}${b_type}"
+	echo
+
+	local yesno
+
+	echo
+	while true; do
+		print_off -n "${move_up}${color_y}Do you want to restore the $b_type [yes/NO]:${color_n} [0K"
+		read yesno
+		[[ ${(L)yesno} = yes ]] && return
+		break
+	done
+
+	print_box "Abondoning restoration of the $b_type!"
+	exit 1
+}
+
+
+backup_system(){
+
+	exclusion_list_system
+	get_backup_mounts
+	mount_backup_devices
+
+	clear_snap_cache
+	clear_apt_cache
+
+	select_smb_server
+	select_smb_share
+
+	local desc
+
+	if [[ $BLS_TEST -eq 0 ]]; then
+		echo
+		echo
+		while true; do
+			echo -n "${move_up}"
+			echo -n "   ${color_y}Backup description:${color_n} [0K"
+
+			read desc
+			[[ -n $desc ]] && break
+		done
+
+		echo
+	fi
+
+	CHECK_FOR_FAILES=1
+
+	mount_smb_share
+	remove_failed_backups
+	tag_smb_share
+
+	backup_system_files $desc
+
+}
+
+backup_data(){
+
+	backup_list_data
+	exclusion_list_data
+
+	select_smb_server
+	select_smb_share
+
+	local desc
+
+	if [[ $BLS_TEST -eq 0 ]]; then
+		echo
+		echo
+		while true; do
+			echo -n "${move_up}"
+			echo -n "   ${color_y}Backup description:${color_n} [0K"
+
+			read desc
+			[[ -n $desc ]] && break
+		done
+
+		echo
+	fi
+
+	CHECK_FOR_FAILES=1
+
+	mount_smb_share
+	remove_failed_backups
+	tag_smb_share
+
+	backup_data_files $desc
+
+}
+
+backup_system_files(){
+	local desc=$1
+
+	# calculate  total size of backup
+	#
+	local tar_size=$(
+		# create tar exclusion list
+		#
+		echo ${(j:\n:)BLS_BACKUP_EXCLUDE} > /tmp/bls-exclude
+
+		(
+			cd /
+			du --exclude-from=/tmp/bls-exclude -ms /* |
+			awk '{sum = sum + $1} END {print sum}'
+		) &
+
+		zprogress wait $! "Calculating backup size"
+
+		rm -f /tmp/bls-exclude
+	)
+
+	# define name of backup dir. For each host there will be
+	# separate dir (named as host), and each backup will be in
+	# separate dir with name made as time stamp.
+	#
+	local backup_dir="$SAMBA_MOUNT/$(hostname)/$BLS_TASK/$(date "+%F_%Hx%M")"
+
+	# if backup with same time stamp exists, sleep for a while
+	#
+	if [[ -d $backup_dir ]]; then
+		local pause_time=$((60 - $(date +%S)))
+		local start_time=$(date +%s)
+		local time_diff
+
+		# sleep for a while
+		#
+		(
+			while true; do
+				sleep 0.2
+				time_diff=$(($(date +%s) - start_time))
+				[[ $time_diff -gt $pause_time ]] && break
+			done
+		) &
+
+		zprogress wait $! "Time delay "
+	fi
+		
+
+	#################################################
+	# Start backup. First switch of cursor
+	#
+
+	echo
+	tput civis >/dev/tty
+
+		# create directory for backup (name of directory
+		# will be time stamp
+		#
+		backup_dir="$SAMBA_MOUNT/$(hostname)/$BLS_TASK/$(date "+%F_%Hx%M")"
+		mkdir -p $backup_dir
+
+		# add description to backup and stamp declaring
+		# this a bls-backu
+		#
+		echo "system" > $backup_dir/.bls-backup
+		echo "${desc//;/,}" > $backup_dir/.description
+
+		# create list of mounts and copy current
+		# fstab
+		#
+		echo ${(j:\n:)BLS_BACKUP_MOUNTS} > $backup_dir/.mounts
+		cp /etc/fstab $backup_dir/.fstab
+
+		# create tar exclusion list
+		#
+		echo ${(j:\n:)BLS_BACKUP_EXCLUDE} > $backup_dir/.exclude
+
+
+		# create tar archive
+		#
+		local cwd=$(pwd)
+		cd /
+
+		local backup_size=$(echo $tar_size | awk '{printf "%5.1fG", ($1 / 1024)}')
+		print_off "${color_y}Backingup system:${color_n} $backup_size"
+		echo
+
+		if [[ $BLS_TEST -eq 1 ]]; then
+
+			echo
+			echo -n "${move_up}"
+
+			tar \
+				--exclude-from=$backup_dir/.exclude \
+				-cvf - /  \
+				2> >(
+					grep --line-buffered -v   \
+						-e 'socket ignored'   \
+						-e 'Removing leading' \
+					    > $backup_dir/backuped_files.txt
+				) |
+			pv -F "   Time: %t %r%p %e" -w 60 -s ${tar_size}m |\
+			cat > /dev/null
+
+			(
+				local line
+				local parts
+
+				cat $backup_dir/backuped_files.txt |
+				while read line; do
+					[[ -d $line ]] || continue
+
+					parts=("${(@s:/:)${${line/#\/}/%\/}}")
+
+					[[ $#parts -le $BLS_TREE_LEVEL ]] && echo "${line/%\/}/"
+				done |
+				sort |
+				uniq |
+				tree --fromfile .  |
+				grep -Ev '[0-9]+ directories, ' > $backup_dir/backuped_dirs.txt
+			) &
+
+			echo
+			zprogress wait $! "Creating directory list"
+
+		else
+			echo
+			echo -n "${move_up}"
+
+			tar_size=$((tar_size / 2))
+
+			tar \
+				--exclude-from=$backup_dir/.exclude \
+			    -cf - /  \
+				2> >(
+					grep --line-buffered -v  \
+						-e 'socket ignored' \
+						-e 'Removing leading' >&2
+				) |
+
+			pigz |\
+			pv -F "   Time: %t %r%p %e" -w 60 -s ${tar_size}m |\
+			cat > $backup_dir/system-image.tar.gz
+		fi
+
+		# create stamp signaling backup was succesfull
+		#
+		if [[ $BLS_TEST -eq 0 ]]; then
+			date "+%F %H:%M:%S" > $backup_dir/.done
+		else
+			date "+%F %H:%M:%S" > $backup_dir/.test
+		fi
+
+		# save running config to file
+		#
+		{
+
+			echo "[ $BLS_TASK ]"
+			echo "   type: system"
+			echo "   desc: $BLS_CONFIG_DESC"
+			echo
+			 
+			local prefix="exclude:"
+			local pwidth=$#prefix
+			local item
+
+			if [[ -n $BLS_BACKUP_EXCLUDE ]]; then
+
+				for item in "${(O@)BLS_BACKUP_EXCLUDE}"; do
+					echo "   ${(r:$pwidth:)prefix} $item"
+					prefix=""
+				done
+				echo
+			fi
+
+			if [[ -n $BLS_BACKUP_MOUNTS ]]; then
+				prefix="mounts:"
+
+				for item in "${(@)BLS_BACKUP_MOUNTS}"; do
+					echo "   ${(r:$pwidth:)prefix} ${item%%;*}"
+					prefix=""
+				done
+				echo
+			fi
+		} > $backup_dir/.config
+
+		if [[ $BLS_TEST -eq 0 ]]; then
+			echo
+			print_box "System has been succesfully backuped!"
+			echo
+			print_off "${color_y}Server: ${color_n}$SAMBA_SERVER"
+			print_off "${color_y}Share:  ${color_n}$SAMBA_SHARE"
+			print_off "${color_y}Task:   ${color_n}$BLS_TASK"
+			echo
+
+		else
+			SAMBA_MOUNT=""
+
+			echo
+			print_box "Test run has been succesfully done!"
+
+			{
+				cat <<-EOF | sed -e 's/^/   /'
+					${color_y}
+					${color_y}
+					This is 'dry run' of backup. In backup directory file was
+					created containing  the list of all files and directories
+					which would be backed up in  real run.  After 'bls' exits
+					directory will stay and  will be mounted, but next run of
+					'bls'  will  unmount  and  delete  directory  since it is
+					considered temporary.
+					
+					${color_y}Backup dir:${color_n} ${backup_dir}${color_y}
+
+					${color_y}Directory list:${color_n} backuped_dirs.txt
+					${color_y}Full file list:${color_n} backuped_files.txt
+
+					${color_y}Server: ${color_n}$SAMBA_SERVER
+					${color_y}Share:  ${color_n}$SAMBA_SHARE
+					${color_y}Task:   ${color_n}$BLS_TASK
+					${color_n}
+				EOF
+
+				print_off "${color_y}Running config:${color_n}"
+				echo
+
+				cat $backup_dir/.config |
+				print_off --offset=5
+
+				echo
+				print_off "${color_y}Backuped directories (tree level $BLS_TREE_LEVEL}:${color_n}"
+				echo
+
+				cat $backup_dir/backuped_dirs.txt |
+				print_off --offset=5
+
+				echo
+			} | less -RFX
+		fi 
+
+
+	tput cnorm >/dev/tty
+	#
+	# End backup. Show cursor again
+	#################################################
+}
+
+backup_data_files(){
+	local desc=$1
+
+	# calculate  total size of backup
+	#
+
+	local tar_size=$(
+		# create tar exclusion list
+		#
+		echo ${(j:\n:)BLS_BACKUP_EXCLUDE} > /tmp/bls-exclude
+
+		(
+			cd /
+			du --exclude-from=/tmp/bls-exclude -ks $BLS_BACKUP_INCLUDE |
+			awk '{sum = sum + $1} END {printf "%d", ((sum/1024) + 1) }'
+		) &
+
+		zprogress wait $! "Calculating backup size"
+
+		# echo
+		# cat /tmp/bls-exclude
+		# echo
+		rm -f /tmp/bls-exclude
+	)
+
+
+	# define name of backup dir. For each host there will be
+	# separate dir (named as host), and each backup will be in
+	# separate dir with name made as time stamp.
+	#
+	local backup_dir="$SAMBA_MOUNT/$(hostname)/$BLS_TASK/$(date "+%F_%Hx%M")"
+
+	# if backup with same time stamp exists, sleep for a while
+	#
+	if [[ -d $backup_dir ]]; then
+		local pause_time=$((60 - $(date +%S)))
+		local start_time=$(date +%s)
+		local time_diff
+
+		# sleep for a while
+		#
+		(
+			while true; do
+				sleep 0.2
+				time_diff=$(($(date +%s) - start_time))
+				[[ $time_diff -gt $pause_time ]] && break
+			done
+		) &
+
+		zprogress wait $! "Time delay "
+	fi
+		
+
+	#################################################
+	# Start backup. First switch of cursor
+	#
+
+	echo
+	tput civis >/dev/tty
+
+		# create directory for backup (name of directory
+		# will be time stamp
+		#
+		backup_dir="$SAMBA_MOUNT/$(hostname)/$BLS_TASK/$(date "+%F_%Hx%M")"
+		mkdir -p $backup_dir
+
+		# add description to backup and stamp declaring
+		# this a bls-backu
+		#
+		echo "data" > $backup_dir/.bls-backup
+		echo "${desc//;/,}" > $backup_dir/.description
+
+		# create tar exclusion list
+		#
+		echo ${(j:\n:)BLS_BACKUP_EXCLUDE} > $backup_dir/.exclude
+
+		# create tar inclusion list
+		#
+		echo ${(j:\n:)BLS_BACKUP_INCLUDE} > $backup_dir/.include
+
+		# create tar archive
+		#
+
+		local cwd=$(pwd)
+		cd /
+
+		local backup_size=$(echo $tar_size | awk '{printf "%5.1fM", $1}')
+		print_off "${color_y}Backingup data:${color_n} $backup_size"
+		echo
+
+		if [[ $BLS_TEST -eq 1 ]]; then
+
+			echo
+			echo -n "${move_up}"
+
+			tar \
+				--exclude-from=$backup_dir/.exclude \
+				--files-from=$backup_dir/.include \
+				-cvf - \
+				2> >(
+					grep --line-buffered -v   \
+						-e 'socket ignored'   \
+						-e 'Removing leading' \
+					    > $backup_dir/backuped_files.txt
+				) |
+			pv -F "   Time: %t %r%p %e" -w 60 -s ${tar_size}m |\
+			cat > /dev/null
+
+			(
+				local line
+				local parts
+
+				cat $backup_dir/backuped_files.txt |
+				while read line; do
+					[[ -d $line ]] || continue
+
+					parts=("${(@s:/:)${${line/#\/}/%\/}}")
+
+					[[ $#parts -le $BLS_TREE_LEVEL ]] && echo "${line/%\/}/"
+				done |
+				sort |
+				uniq |
+				tree --fromfile .  |
+				grep -Ev '[0-9]+ directories, ' > $backup_dir/backuped_tree_dirs.txt
+			) &
+
+			echo
+			zprogress wait $! "Creating directory list"
+
+			(
+				local line
+				local parts
+				local level=$((BLS_TREE_LEVEL + 1))
+
+				cat $backup_dir/backuped_files.txt |
+				while read line; do
+					[[ -d $line ]] && continue
+
+					parts=("${(@s:/:)${${line/#\/}/%\/}}")
+
+					[[ $#parts -le $level ]] && echo "${line/%\/}/"
+				done |
+				sort |
+				uniq |
+				tree --fromfile .  |
+				grep -Ev '[0-9]+ directories, ' > $backup_dir/backuped_tree_files.txt
+			) &
+
+			echo
+			zprogress wait $! "Creating file list"
+
+		else
+			echo
+			echo -n "${move_up}"
+
+			tar_size=$((tar_size / 2))
+
+			tar \
+				--exclude-from=$backup_dir/.exclude \
+				--files-from=$backup_dir/.include \
+			    -cf - \
+				2> >(
+					grep --line-buffered -v  \
+						-e 'socket ignored' \
+						-e 'Removing leading' >&2
+				) |
+
+			pigz |\
+			pv -F "   Time: %t %r%p %e" -w 60 -s ${tar_size}m |\
+			cat > $backup_dir/data-files.tar.gz
+		fi
+
+		# create stamp signaling backup was succesfull
+		#
+		if [[ $BLS_TEST -eq 0 ]]; then
+			date "+%F %H:%M:%S" > $backup_dir/.done
+		else
+			date "+%F %H:%M:%S" > $backup_dir/.test
+		fi
+
+		# save running config to file
+		#
+		{
+
+			echo "[ $BLS_TASK ]"
+			echo "   type: data"
+			echo "   desc: $BLS_CONFIG_DESC"
+			echo
+			 
+			local prefix="backup:"
+			local pwidth=$#prefix
+			local item
+
+			if [[ -n $BLS_BACKUP_INCLUDE ]]; then
+
+				for item in "${(O@)BLS_BACKUP_INCLUDE}"; do
+					echo "   ${(r:$pwidth:)prefix} $item"
+					prefix=""
+				done
+				echo
+			fi
+			 
+			prefix="exclude:"
+			pwidth=$#prefix
+
+			if [[ -n $BLS_BACKUP_EXCLUDE ]]; then
+
+				for item in "${(O@)BLS_BACKUP_EXCLUDE}"; do
+					echo "   ${(r:$pwidth:)prefix} $item"
+					prefix=""
+				done
+				echo
+			fi
+
+			if [[ -n $BLS_BACKUP_MOUNTS ]]; then
+				prefix="mounts:"
+
+				for item in "${(@)BLS_BACKUP_MOUNTS}"; do
+					echo "   ${(r:$pwidth:)prefix} ${item%%;*}"
+					prefix=""
+				done
+				echo
+			fi
+		} > $backup_dir/.config
+
+		if [[ $BLS_TEST -eq 0 ]]; then
+			echo
+			print_box "Data files have been succesfully backuped!"
+			echo
+			print_off "${color_y}Server: ${color_n}$SAMBA_SERVER"
+			print_off "${color_y}Share:  ${color_n}$SAMBA_SHARE"
+			print_off "${color_y}Task:   ${color_n}$BLS_TASK"
+			echo
+
+		else
+			SAMBA_MOUNT=""
+
+			echo
+			print_box "Test run has been succesfully done!"
+
+			{
+				cat <<-EOF | sed -e 's/^/   /'
+					${color_y}
+					${color_y}
+					This is 'dry run' of backup. In backup directory file was
+					created containing  the list of all files and directories
+					which would be backed up in  real run.  After 'bls' exits
+					directory will stay and  will be mounted, but next run of
+					'bls'  will  unmount  and  delete  directory  since it is
+					considered temporary.
+					
+					${color_y}Backup dir:${color_n} ${backup_dir}${color_y}
+
+					${color_y}Directory tree:${color_n} backuped_tree_dirs.txt
+					${color_y}FIle list tree:${color_n} backuped_tree_files.txt
+					${color_y}Full file list:${color_n} backuped_files.txt
+
+
+					${color_y}Server: ${color_n}$SAMBA_SERVER
+					${color_y}Share:  ${color_n}$SAMBA_SHARE
+					${color_y}Task:   ${color_n}$BLS_TASK
+					${color_n}
+				EOF
+
+				print_off "${color_y}Running config:${color_n}"
+				echo
+
+				cat $backup_dir/.config |
+				print_off --offset=5
+
+				echo
+				print_off "${color_y}Backuped directories (tree level $BLS_TREE_LEVEL}:${color_n}"
+				# echo
+
+				cat $backup_dir/backuped_tree_dirs.txt |
+				print_off --offset=5
+
+				echo
+				print_off "${color_y}Backuped files (tree level $BLS_TREE_LEVEL}:${color_n}"
+				# echo
+
+				cat $backup_dir/backuped_tree_files.txt |
+				print_off --offset=5
+
+				echo
+			} | less -RFX
+		fi 
+
+
+	tput cnorm >/dev/tty
+	#
+	# End backup. Show cursor again
+	#################################################
+}
+
+
+restore_system(){
+	echo
+	mdadm_scan
+	mdadm_recreate
+
+	get_restore_mounts
+
+	format_restore_partitions
+	mount_restore_devices
+
+	restore_system_files
+	mirror_efi_parititons
+
+	BLS_LAST_MOUNTS=""
+}
+
+restore_data(){
+	select_restore_dir
+	restore_data_files
+}
+
+restore_system_files(){
+	local tar_file=$BLS_RESTORE/system-image.tar.gz
+	local tar_size=$(du -ms $tar_file | awk '{print $1}')
+
+	echo
+	local backup_size=$(echo $tar_size | awk '{printf "%5.1fG", ($1 / 1024)}')
+	print_off "${color_y}Restoring system:${color_n} $backup_size"
+	echo
+
+	echo
+	echo -n "${move_up}"
+
+	cat $tar_file |
+	pv -F "   Time: %t %r%p %e" -w 60 -s ${tar_size}m |
+	pigz -d |
+ 	(cd $BLS_RESTORE_DIR; tar -xf -)
+	echo
+}
+
+restore_data_files(){
+	local tar_file=$BLS_RESTORE/data-files.tar.gz
+	local tar_size=$(du -ms $tar_file | awk '{print $1}')
+
+	echo
+	local backup_size=$(echo $tar_size | awk '{printf "%5.1fM", $1}')
+	print_off "${color_y}Restoring files:${color_n} $backup_size"
+	echo
+
+	echo
+	echo -n "${move_up}"
+
+	cat $tar_file |
+	pv -F "   Time: %t %r%p %e" -w 60 -s ${tar_size}m |
+	pigz -d |
+ 	(cd $BLS_RESTORE_DATA; tar -xf -)
+	echo
+}
+
+
+remove_failed_backups(){
+	[[ $CHECK_FOR_FAILES -ne 1 ]] && return
+	[[ -f $BLS_TAG     ]] || return
+	[[ -n $SAMBA_MOUNT ]] || return 0
+	[[ -d $SAMBA_MOUNT ]] || return 0
+
+	local mount=$(mount | awk -v mnt=$SAMBA_MOUNT '$3 == mnt{print}')
+
+	[[ -z $mount ]] && return
+
+	local cwd=$(pwd)
+	cd $SAMBA_MOUNT
+
+	local failed_backups=("${(@f)$(
+		(
+			local backups=("${(@f)$(
+				find . -name '.bls-backup'
+			)}")
+
+			local backup
+			for backup in $backups; do
+				if [[ ! -f "${backup%/.bls-backup}/.done" ]]; then
+					echo ${backup%/.bls-backup}
+				fi
+			done
+		) &
+
+		zprogress wait $! "Checking for failed backups"
+	)}")
+
+	CHECK_FOR_FAILES=0
+
+	[[ -z $failed_backups ]] && cd $cwd && return
+
+	(
+		local backup
+		for backup in $failed_backups; do
+			rm -rf $backup 2>/dev/null
+		done
+	) &
+
+	zprogress wait $! "Removing failed backups"
+
+	cd $cwd
+}
+
+list_backups(){
+	local header=("Host;Task;Type;  Size;Time;;Description")
+
+	local __backups=("${(@f)$(
+		get_list_of_backups &
+		zprogress wait $! "Creating list of backups" 
+	)}")
+
+	# zprogress spinner "Creating list of backups"
+	# local backups=("${(@f)$(get_list_of_backups)}")
+	# zprogress end "DONE"
+
+	if [[ -z $backups ]]; then
+		print_box "There are no backups on selected server/share!"
+
+		exit 1
+	fi
+
+	zmenu print \
+		--raw \
+		--focus 0 \
+		--color 'b c b g b c c b' \
+		--align "r l l c r l" \
+		--spaces "1 2 ' [' '] ' ' [' 1 '] ' 2" \
+		--no-bottom-line \
+		--title "${color_y}List of backups on server $SAMBA_SERVER" \
+		--focus-colors "g n" \
+		--header $header \
+		$backups
+}
+
+get_list_of_backups(){
+	local backup
+	local parts
+	local desc
+	local task
+	local btype
+	local size
+	local bdir
+
+	collect_backups
+
+	if [[ $BLS_BACKUP_HOST = '*' ]]; then
+		echo ${(j:\n:)${(@)BLS_BACKUP_LIST/#/${SAMBA_MOUNT}/}}
+	else
+		echo ${(j:\n:)${(@M)BLS_BACKUP_LIST:#${BLS_BACKUP_HOST}/*}/#/${SAMBA_MOUNT}/}
+	fi |
+
+	while read backup; do
+		btype=$(cat $backup/.bls-backup)
+		desc=$(cat $backup/.description)
+		size=$(
+			du -ks $backup 2>/dev/null |
+			awk '{
+				suffix = "K"
+				size = $1
+
+				if (size > 1024){
+					suffix = "M"
+					size = size / 1024
+				}
+
+				if (size > 1024){
+					suffix = "G"
+					size = size / 1024
+				}
+
+				if (size > 1024){
+					suffix = "T"
+					size = size / 1024
+				}
+
+				if (suffix == "T" || suffix == "G")
+					printf "%.1f %s\n", size, suffix
+				else
+					printf "%.0f %s\n", size, suffix
+				
+			}'
+		)
+
+		backup=${backup#$SAMBA_MOUNT/}
+		backup=${backup//\//;}
+		backup=$(echo $backup | sed -E -e 's/_(..)x(..)$/;\1:\2/')
+
+		parts=("${(@s:;:)backup}")
+
+		[[ $btype = system ]] && btype="y:system"
+
+		#     host      task      type   size  date      hour      desc
+		#
+		echo "$parts[1];$parts[2];$btype;$size;$parts[3];$parts[4];$desc"
+	done |
+	sort -t\; -k1,1 -k2r,2 -k5
+}
+
+
+exclusion_list_system(){
+
+	# create exclude file list
+	#
+	local -U tar_exclude=(
+		/proc
+		/sys
+		/dev
+		/run
+		/tmp
+		/media
+		/var/tmp
+		lost+found
+	)
+	
+	exclusion_list_config
+}
+
+exclusion_list_data(){
+	local -U tar_exclude=(
+		/proc
+		/sys
+		/dev
+		/run
+		/tmp
+		/media
+		/var/tmp
+		lost+found
+	)
+
+	exclusion_list_config
+}
+
+exclusion_list_config(){
+
+	tar_exclude+=("${(@)BLS_CONFIG_EXCLUDE}")
+
+	tar_exclude=("${(@f)$(
+		local failed=()
+		local -U exclude_list=()
+		local item exclude_item
+
+		(
+			for exclude_item in $tar_exclude; do
+
+				item=$exclude_item
+
+				# remove trailing '/' or '/*' eg, only 
+				# deal with directory name without
+				# trailing '/'
+				#
+				regexp-replace item '\/+' '/'
+				regexp-replace item '\*+' '*'
+				regexp-replace item '\/+$' '/'
+				regexp-replace item '(\/\*)+$' '/*'
+				regexp-replace item '\/\*$' '/'
+
+				# [[ $item != '/' ]] && item=${item%/}
+
+				# we can not exclude root directory
+				#
+				if [[ $item = '/' ]]; then
+					failed=("Failed with root:$exclude_item")
+					break
+				fi
+
+				regexp-replace item '\/$' ''
+
+				# if item is file pattern add it
+				# to exclusion list
+				#
+				[[ $item[1] != '/'  ]] && exclude_list+=("$item") && continue
+
+				# if item is file pattern inside
+				# directory, add it to exclusion
+				# list
+				#
+				[[ $item    =~ '\*' ]] && exclude_list+=("$item") && continue
+
+				# if item is existing directory add
+				# exclusion of directory content and
+				# not directory itself
+				#
+				[[ -d $item ]] && exclude_list+=("${item/%//*}") && continue
+
+				# if item is existing file, add it
+				# to exclusion list
+				#
+				[[ -e $item ]] && exclude_list+=("$item")   && continue
+
+				# if absolut path does not represent
+				# existing directory or file, raise
+				# error
+				#
+				failed+=("Failed with item:$exclude_item")
+			done
+
+			[[ -n $failed ]] && echo ${(j:\n:)failed}
+			[[ -z $failed ]] && echo ${(j:\n:)exclude_list}
+		) &
+
+		zprogress wait $! "Creating exclude list"
+	)}")
+
+	if [[ ! $tar_exclude =~ '^Failed with (item|root):' ]]; then
+		tar_exclude+=("$SAMBA_MOUNT" "$SAMBA_MOUNT/*")
+		BLS_BACKUP_EXCLUDE=("${(@o)tar_exclude}")
+		return
+	fi
+
+
+	{
+		if [[ $tar_exclude =~ '^Failed with item:' ]]; then
+			cat <<-EOF | print_box --align=left
+				There are non existing directories/files in 'exclude'
+				list. Fix config file and run 'bls' again.
+			EOF
+		else
+			print_box "We can not exclude root directory in 'exclude' list"
+		fi
+
+		local val_prefix="Invalid exclude:"
+		local item
+
+		for item in {1..$#tar_exclude}; do
+			print_off "${color_y}${(r:16:)val_prefix}${color_n} ${tar_exclude[$item]#*:}"
+			val_prefix=""
+		done
+
+		echo
+	} >&2
+
+	exit 1
+}
+
+
+backup_list_data(){
+	local -U tar_backup=()
+
+	backup_list_config
+}
+
+backup_list_config(){
+
+	tar_backup+=("${(@)BLS_CONFIG_BACKUP}")
+
+	tar_backup=("${(@f)$(
+		local failed=()
+		local -U backup_list=()
+		local item backup_item
+
+		(
+			for backup_item in $tar_backup; do
+
+				item=$backup_item
+
+				# remove trailing '/' or '/*' eg, only 
+				# deal with directory name without
+				# trailing '/'
+				#
+				regexp-replace item '\/+' '/'
+				regexp-replace item '\*+' '*'
+				regexp-replace item '\/+$' '/'
+				regexp-replace item '(\/\*)+$' '/*'
+				regexp-replace item '\/\*$' '/'
+
+
+				# we can not backup root directory
+				#
+				if [[ $item = '/' ]]; then
+					failed=("Failed with root:$backup_item")
+					break
+				fi
+
+				# If item is not absolute path raise error
+				#
+				if [[ $item[1] != '/'  ]]; then
+					failed+=("Failed with item:$backup_item")
+					echo "Failed: $item" >&2
+					continue
+				fi
+
+				# if item is file pattern inside
+				# directory, add it to backup
+				# list
+				#
+				[[ $item =~ '\*' ]] && backup_list+=("${item%/}") && continue
+
+				# if item ends with '/' than check for directory
+				#
+				if [[ $item[-1] = '/' ]]; then
+					if [[ -d $item ]]; then
+						backup_list+=("${item%/}")
+					else
+						failed+=("Failed with item:$backup_item")
+					fi
+
+					continue
+				fi
+
+				# if item is existing directory or file
+				# add it to backup list
+				#
+				[[ -e $item ]] && backup_list+=("$item")   && continue
+
+				# if absolut path does not represent
+				# existing directory or file, raise
+				# error
+				#
+				failed+=("Failed with item:$backup_item")
+			done
+
+			[[ -n $failed ]] && echo ${(j:\n:)failed}
+			[[ -z $failed ]] && echo ${(j:\n:)backup_list}
+		) &
+
+		zprogress wait $! "Creating backup list"
+	)}")
+
+	if [[ -z $tar_backup ]]; then
+		cat <<-EOF | print_box --align=left
+			No files/directories were given in backup list.  Use
+			'backup' key do define file to be backupped.
+		EOF
+
+		echo
+
+		exit 1
+	fi >&2
+
+	if [[ ! $tar_backup =~ '^Failed with (item|root):' ]]; then
+		BLS_BACKUP_INCLUDE=("${(@o)tar_backup}")
+
+		return
+	fi
+
+
+	{
+		if [[ $tar_backup =~ '^Failed with item:' ]]; then
+			cat <<-EOF | print_box --align=left
+				There are non existing directories/files in 'exclude'
+				list. Fix config file and run 'bls' again.
+			EOF
+		else
+			print_box "We can not backup root directory in DATA backup!"
+		fi
+
+		local val_prefix="Invalid backup:"
+		local item
+
+		for item in {1..$#tar_backup}; do
+			print_off "${color_y}${(r:16:)val_prefix}${color_n} ${tar_backup[$item]#*:}"
+			val_prefix=""
+		done
+
+		echo
+	} >&2
+
+	exit 1
+}
+
+select_restore_dir(){
+	local cwd=$(pwd)
+
+	BLS_RESTORE_DATA="/"
+
+	[[ $cwd = '/' ]] && return
+
+	cat <<-EOF | print_off
+		${color_y}
+
+		You  can restore  files into original location or current
+		directory. Choose where you want files to be restored:
+		${color_n}
+	EOF
+
+	print_off "${color_y}curr dir: ${color_n}$cwd"
+	echo
+
+	local location
+
+	zmenu select location \
+		--no-bottom-line \
+		--focus 2 \
+		--width 57  \
+		--color "b y" \
+		--align "r l" \
+		--title "${color_b}Where to restore data:" \
+		"Original location" "Current directory"
+
+	if [[ -z $location ]]; then
+		echo
+		print_box \
+			"By not selecting destination for restoration" \
+			"You have abandoned current restoration procedure"
+		echo
+
+		exit 1
+	fi
+
+	if [[ $location -eq 1 ]]; then
+		BLS_RESTORE_DATA='/'
+	else
+		BLS_RESTORE_DATA=$cwd
+	fi
+}
+
+
+delete_backups(){
+	local __container=$1; shift
+	local __selected=("$@")
+	local __deleted=()
+	local __yesno
+	local __ret_val
+
+	zterm cursor off
+
+	for i in {1..$#__selected}; do
+		zterm cursor position 1 1
+
+		zterm clear line; echo
+		zterm clear line; echo
+
+		zmenu print \
+			--focus $i \
+			--focus-colors "c n" \
+			--width 57  \
+			--color "c d" \
+			--align "r l l c r l" \
+			--no-cell-color \
+			--title "${color_y}Backup to delete:" \
+			$__selected
+
+		zterm clear down
+		zterm cursor on
+
+		echo
+		print_off -n "${color_y}Delete this backup [yes/NO]: ${color_n}[0K"
+		read yesno
+		zterm cursor restore
+
+		[[ -z $yesno ]] || [[ ! yes =~ ^${(L)yesno}.*$ ]] && continue
+
+		backup_dir=$(
+			echo $__selected[$i] |
+			awk -F\; '{
+				sub (":","x",$6)
+				print $1 "/" $2 "/" $5 "_" $6
+			}'
+		)
+
+		backup_dir="${SAMBA_MOUNT}/$backup_dir"
+
+		if [[ -d $backup_dir ]]; then
+			echo -n "${move_up}[0K"
+
+			rm -r $backup_dir 2>/dev/null &
+			zprogress wait $! "Deleting backup no. $i"
+
+			__ret_val=$?
+
+			[[ $__ret_val -eq 0 ]] && __deleted+=($i) && continue
+
+			echo -n "${move_up}[0K"
+			print_off "${color_r}We FAILED to delete backup no. $i!"
+			echo
+			print_off -n "${color_y}Press <ENTER> to continue: "
+
+			read __yesno
+		fi
+	done
+
+	local __result=()
+
+	for i in $__deleted; do
+		__result+=("${__selected[$i]}")
+	done
+
+	eval "$(typeset -p __result | sed -e "s/typeset -a __result/$__container/")"
+
+	zterm cursor restore
+}
+
+show_backup_storage_usage(){
+
+	# calculate backup storage usage
+	#
+	local space=("${(@f)$(
+		df -BM $SAMBA_MOUNT |
+		perl -ne '
+			next if ($. == 1);
+			/^.*?\s+(\d+)M\s+(\d+)M\s+(\d+)M\s/;
+			
+			printf ("%d:%d:%d\n", $1, $2, $3)
+		' |
+
+		awk -F: '
+			function suffix_size (size){
+				suffix = "M"
+
+				if (size > 1024){
+					suffix = "G"
+					size = size / 1024
+				}
+
+				if (size > 1024){
+					suffix = "T"
+					size = size / 1024
+				}
+
+				s_size = sprintf ("%5.1f %s", size, suffix)
+
+				return s_size
+			}
+
+			{
+
+				total = $1;
+				used  = $2;
+				free  = $3;
+
+				p_used = int ((100 * used / total) + 0.5);
+				p_free = int ((100 * free / total) + 0.5);
+
+				# $g_total = int (10 * $s_total / 1024) / 10;
+				# $g_used  = int (10 * $s_used  / 1024) / 10;
+				# $g_free  = int (10 * $s_free  / 1024) / 10;
+
+				total = suffix_size(total)
+				used  = suffix_size(used)
+				free  = suffix_size(free)
+
+				printf "%s\n", total;
+				printf "%s (%3d%%)\n", used, p_used;
+				printf "%s (%3d%%)\n", free, p_free;
+			}
+		'
+	)}")
+
+	print_off "${color_y}Disk usage on backup server:${color_n}"
+	print_off "---------------------------------------------------------"
+	print_off "${color_y}Total:${color_n} $space[1]"
+	print_off "${color_y}Used: ${color_n} $space[2]"
+	print_off "${color_y}Free: ${color_n} $space[3]"
+}
+
+
+
+
+
+###############################################
+# clear cache
+#
+clear_apt_cache(){
+	apt clean >/dev/null 2>&1 &
+	zprogress wait $! "Clearing apt cache"
+}
+
+clear_snap_cache(){
+	! which snap >/dev/null && return
+
+	(
+		snap list --all |
+		awk '$NF ~ /disabled/{print $1 " " $3}' |
+		while read snapname revision; do
+			snap remove "$snapname" --revision="$revision" >/dev/null 2>&1
+		done
+	) &
+	zprogress wait $! "Clearing snap cache"
+}
+
+
+
+###############################################
+# mount points
+#
+mount_backup_devices(){
+	local mounted=("${(@f)$(
+		lsblk -no MOUNTPOINT |
+		grep -v '^$' |
+		sort -u
+	)}")
+
+	local candidates=("${(@)BLS_BACKUP_MOUNTS%%;*}")
+
+	BLS_SYSTEM_MOUNTS=("${(@)candidates:|mounted}")
+
+	[[ -z $BLS_SYSTEM_MOUNTS ]] && return
+
+	local mnt_report=("${(@f)$(
+		(
+			local mpoint
+			local emsg
+			local mpoint_done=()
+
+			for mpoint in $BLS_SYSTEM_MOUNTS; do
+				emsg=$(mount $mpoint 2>&1)
+
+				if [[ -z $emsg ]]; then
+					echo "OK:$mpoint"
+				else
+					echo "MNT_ERROR:$emsg"
+					break
+				fi
+			done
+		) &
+
+		zprogress wait $! "Mounting temporary mounts"
+	)}")
+
+	[[ ! $mnt_report =~ 'MNT_ERROR:' ]] && return
+
+	cat <<-EOF | print_box --align=left
+		 Failed to execute all mounts! Check error message,
+		 fix problem(s) and rerun 'bls'.
+	EOF
+
+	local error_msg=${(M)mnt_report:#MNT_ERROR*}
+
+	print_off "${color_y}error msg:${color_n} ${error_msg#*:}"
+
+	BLS_SYSTEM_MOUNTS=("${${(@M)mnt_report:#OK:*}#OK:}")
+
+	echo
+	echo
+	umount_devices
+}
+
+mount_restore_devices(){
+	mkdir $BLS_RESTORE_DIR 2>/dev/null
+
+	if [[ ! -d $BLS_RESTORE_DIR ]]; then
+		cat <<-EOF | print_box --align=left
+			  Failed to create restore dir, necessary to mount
+			  system partitions.
+
+			  Exiting ...
+		EOF
+
+		exit 1
+	fi
+
+
+	BLS_SYSTEM_MOUNTS=("${(@k)BLS_RESTORE_MOUNTS/#/$BLS_RESTORE_DIR}")
+
+	local mnt_report=("${(@f)$(
+		(
+			local mpoint mpath
+			local device
+			local emsg
+			local mpoint_done=()
+
+			for mpoint in ${(ok)BLS_RESTORE_MOUNTS}; do
+				emsg=""
+				mpath=${BLS_RESTORE_DIR}${mpoint}
+
+				if [[ $mpoint != '/' ]]; then
+					emsg=$(mkdir -p $mpath 2>&1)
+				fi
+
+				if [[ -z $emsg ]]; then
+					device=$(findfs UUID="$BLS_RESTORE_MOUNTS[$mpoint]")
+					emsg=$(mount $device $mpath 2>&1)
+				fi
+
+				if [[ -z $emsg ]]; then
+					echo "OK:$mpath"
+				else
+					echo "MNT_ERROR:$emsg"
+					break
+				fi
+			done
+		) &
+
+		zprogress wait $! "Mounting restore mounts"
+	)}")
+
+	[[ ! $mnt_report =~ 'MNT_ERROR:' ]] && return
+
+	cat <<-EOF | print_box --align=left
+		 Failed to execute all mounts! Check error message,
+		 fix problem(s) and rerun 'bls'.
+	EOF
+
+	local error_msg=${(M)mnt_report:#MNT_ERROR*}
+
+	print_off "${color_y}error msg:${color_n} ${error_msg#*:}"
+
+	BLS_SYSTEM_MOUNTS=("${${(@M)mnt_report:#OK:*}#OK:}")
+
+	echo
+	echo
+	umount_devices
+
+	exit 1
+
+}
+ 
+umount_devices(){
+
+	[[ -z $BLS_SYSTEM_MOUNTS ]] && return
+
+	local mnt_report=("${(@f)$(
+		(
+			local mpoint
+			for mpoint in $BLS_SYSTEM_MOUNTS; do
+				umount $mpoint 2>&1
+			done
+		) &
+
+		zprogress wait $! "Unmounting temporary mounts"
+	)}")
+
+	BLS_SYSTEM_MOUNTS=()
+
+	[[ -z $mnt_report ]] && return
+
+	cat <<-EOF | print_box --align=left
+		Failed to un mount some temporary mounts! Check error
+		message(s) and manually fix problem(s).
+	EOF
+
+	local error_msg
+	local prefix="error msg:"
+	local pwidth=10
+
+	for error_msg in ${mnt_report}; do
+		print_off "${color_y}${(r:$pwidth:)prefix}${color_n} ${error_msg#*:}"
+		prefix=""
+	done
+	echo
+
+}
+
+mount_chroot_resources(){
+	local is_mounted=$(
+		mount | grep "on $BLS_RESTORE_DIR type"
+	)
+
+	if [[ -z $is_mounted ]]; then
+		cat <<-EOF | print_box --align=left
+			Can't mount chroot resources since, system disk
+			has not been mounted!
+
+			Exiting
+		EOF
+
+		exit 1
+	fi
+
+	local result=("${(@f)$(
+		(
+			local error_msg
+			local b_mount
+			local mounted=()
+
+			for b_mount in dev sys proc; do
+				error_msg=$(
+					mount --bind \
+						/$b_mount $BLS_RESTORE_DIR/$b_mount \
+						3>&1 >/dev/null 2>&3
+				)
+
+				if [[ -z $error_msg ]]; then
+					mounted+=($b_mount)
+				else
+					break
+				fi
+			done
+
+			echo "$error_msg"
+			echo "${(j:;:)mounted}"
+		) &
+
+		zprogress wait $! "Mounting chroot resources"
+	)}")
+
+
+	local error_msg=$result[1]
+	BLS_BINDED_MOUNTS=(${(s:;:)result[2]})
+	
+	[[ -z $error_msg ]] && return
+
+	cat <<-EOF | print_box --align=left
+		Failed to bind mount system directories. Check error
+		message and rerun 'bls' if necesary!
+	EOF
+
+	print_off "${color_y}Error: ${color_n}${error_msg#*:}"
+	echo
+
+	umount_chroot_resources
+
+	exit 1
+}
+
+umount_chroot_resources(){
+	[[ -z $BLS_BINDED_MOUNTS ]] && return
+
+	local error_msg=("${(@f)$(
+		(
+			local error_msg
+			local b_mount
+			local mounted=()
+
+			for b_mount in $BLS_BINDED_MOUNTS; do
+				error_msg=$(
+					umount $BLS_RESTORE_DIR/$b_mount \
+					3>&1 >/dev/null 2>&3
+				)
+
+				[[ -n $error_msg ]] && echo $error_msg && exit 1
+			done
+
+			exit 0
+		) &
+
+		zprogress wait $! "Unmounting chroot resources"
+	)}")
+
+	BLS_BINDED_MOUNTS=()
+	
+	[[ -z $error_msg ]] && return
+
+	cat <<-EOF | print_box --align=left
+		  Failed to unmount bind mounted system directories.
+		  Check  error  message  and  manualy unmount chroot
+		  resources.
+	EOF
+
+	print_off "${color_y}Error: ${color_n}${error_msg#*:}"
+	echo
+}
+ 
+get_backup_mounts(){
+	BLS_BACKUP_MOUNTS=("${(@f)$(
+		(
+			get_root_mounts   &&
+			get_efi_mounts    &&
+			get_config_mounts &&
+
+			echo ${(j:\n:)BLS_BACKUP_MOUNTS}
+		) 2>&1 &
+
+		zprogress wait $! "Getting backup mount points"
+	)}")
+
+	[[ ! $BLS_BACKUP_MOUNTS =~ '#####' ]] && return
+
+	echo ${(j:\n:)BLS_BACKUP_MOUNTS}
+	exit 1
+}
+
+get_restore_mounts(){
+	typeset -gA BLS_RESTORE_MOUNTS=("${(@f)$(
+		(
+			local mount
+			local device
+			local errors=()
+			local mounts=()
+
+			cat $BLS_RESTORE/.mounts |
+			sed -e 's/;.*;/;/' |
+
+			while read mount; do
+				device=$(findfs UUID="${mount#*;}" 2>/dev/null)
+
+				if [[ -z $device ]]; then
+					errors+=("No device UUID=${mount#*;}")
+				elif [[ $is_error -eq 0 ]]; then
+					mounts+=("${(@s:;:)mount}")
+				fi
+			done
+
+			if [[ -n $errors ]]; then
+				local error_no
+				for error_no in {1..$#errors}; do
+					echo "ERROR:${(l:2::0:)error_no}"
+					echo $errors[$error_no]
+				done
+			else
+				echo ${(j:\n:)mounts}
+			fi
+		) &
+
+
+		zprogress wait $! "Getting restore mount points"
+	)}")
+
+
+	if [[ ! ${(k)BLS_RESTORE_MOUNTS} =~ '^ERROR:' ]]; then
+		BLS_LAST_MOUNTS=/mnt/.bls-mounts
+
+		echo ${(j:\n:)${(@kv)BLS_RESTORE_MOUNTS}} > $BLS_LAST_MOUNTS
+		return
+	fi
+
+
+	cat <<-EOF | print_box --align=left
+		 There  are  devices defined as necesary mounts which
+		 are  not  present on  this system.  It could be that
+		 devices in case, are stopped md array or deactivated
+		 volume group.
+
+		 Manualy check, fix problem and rerun 'bls'.
+	EOF
+
+	local prefix="Error:"
+	local key
+	local error_msg
+
+	for key in ${(ok)BLS_RESTORE_MOUNTS}; do
+
+		error_msg=$BLS_RESTORE_MOUNTS[$key]
+		print_off "${color_y}${(l:6:)prefix}${color_n} $error_msg"
+		prefix=""
+	done
+
+	echo
+	exit 1
+}
+
+get_root_mounts(){
+	# Find root filesystem ('/') in fstab file and currently
+	# mountder root filesystem.
+	#
+	local fstab_root=$(find_fstab_root)
+
+	local curr_root=$(
+		lsblk -no MOUNTPOINT,UUID |
+		awk '$1 == "/" {print $2; exit}'
+	)
+
+	local root_path=$(findfs UUID=$curr_root 2>/dev/null)
+	local root_fs=$(lsblk -no FSTYPE $root_path)
+
+
+	# if there is no root filesystem entry in fstab, inform
+	# user and demand fix of "fstab" file.
+	#
+	if [[ -z $fstab_root ]]; then
+		cat <<-EOF | print_box --align=left
+			Something is very wrong. There is no root '/' entry
+			in "fsatb". Create root '/' entry in "fstab" before
+			continuing.
+		EOF
+
+		print_off "${color_y}Current root:${color_n}   $root_path"
+		print_off "${color_y}Possible entry:${color_n} UUID=$curr_root / $root_fs defaults 0 0"
+		echo
+
+		exit 1
+	fi >&2
+
+	local fstab_root_id=${${(s:;:)fstab_root}[3]}
+
+	# if root filesystem defined in fstab is not valid
+	# (we are unable to query UUID) inform user and
+	# demand fix of "fstab" file.
+	#
+	if [[ -z $fstab_root_id ]]; then
+		cat <<-EOF | print_box --align=left
+			Something is very wrong. Current root entry in fstab
+			is not valid/existing filesystem. Fix entry in fsatb
+			before continuing.
+		EOF
+
+		print_off "${color_y}Current root:${color_n}   $root_path"
+		print_off "${color_y}Possible entry:${color_n} UUID=$curr_root / $root_fs defaults 0 0"
+		echo
+
+		exit 1
+	fi >&2
+
+
+	# if root filesystem defined in fstab is not same
+	# as currently mounted, inform user and demand fix
+	# of "fstab" file.
+	#
+	if [[ $fstab_root_id != $curr_root ]]; then
+		cat <<-EOF | print_box --align=left
+			Something is very wrong. Current  root entry in fstab
+			is not same as currenly mounted filesystem. Fix fstab
+			before continuing.
+		EOF
+
+		print_off "${color_y}Current root:${color_n}   $root_path"
+		print_off "${color_y}Possible entry:${color_n} UUID=$curr_root / $root_fs defaults 0 0"
+		echo
+
+		exit 1
+	fi >&2
+
+	BLS_BACKUP_MOUNTS=("$fstab_root")
+	# echo "root mount" >&2
+	# echo ${(j:\n:)BLS_BACKUP_MOUNTS} >&2
+}
+
+get_efi_mounts(){
+	
+	# Find efi mounts in "fstab".
+	#
+	local fstab_efis=("${(@f)$(find_fstab_efis)}")
+	local system_efis=("${(@f)$(find_system_efis)}")
+	local part fs_type
+
+	# there are no EFI mounts in fstab, inform user and
+	# demand fix
+	#
+	if [[ -z $fstab_efis ]]; then
+		cat <<-EOF | print_box --align=left
+			There are no EFI System partition mounts in "fstab".
+			Enter EFI entry in "fstab" before continuing.
+		EOF
+	
+		print_off "${color_y}Possible EFI entries for fstab:${color_n}"
+		echo
+
+		for part in $system_efis; do
+			fs_type=$(lsblk -no FSTYPE $(findfs UUID="$part"))
+			print_off "   UUID='$part' /boot/efi $fs_type default 0 0"
+		done
+
+		exit 1
+	fi >&2
+
+	local fstab_efi_ids=($(
+		local fstab_entry
+
+		for fstab_entry in $fstab_efis; do
+			echo ${${(s:;:)fstab_entry}[3]}
+		done
+	))
+
+	# if EFI filesystem defined in fstab is not valid
+	# (we are unable to query UUID) inform user and
+	# demand fix of "fstab" file.
+	#
+	if [[ $#fstab_efi_ids -ne $#fstab_efis ]]; then
+		cat <<-EOF | print_box --align=left
+			Something is very wrong.  Some EFI entries in fstab
+			are not valid/existing filesystem.  Fix EFI entries
+			in fstab before continuing.
+		EOF
+
+		print_off "${color_y}Possible EFI entries for fstab:${color_n}"
+		echo
+
+		for part in $system_efis; do
+			fs_type=$(lsblk -no FSTYPE $(findfs UUID="$part"))
+			print_off "   UUID='$part' /boot/efi $fs_type default 0 0"
+		done
+
+		exit 1
+	fi >&2
+
+	local curr_efis=("${(@f)$(
+		lsblk -no PARTTYPE,UUID,MOUNTPOINT |
+		awk '$1 == "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" && $3 != "" {print $3 ";" $2}'
+	)}")
+
+	# if currently mounted efi does not correspond to 
+	# fstab entry inform user and demand fix.
+	#
+	local curr_efi c_parts
+	local fstab_efi f_parts
+	local miss_mounted=()
+	local miss_mounts=()
+
+	for curr_efi in $curr_efis; do
+		c_parts=("${(s:;:)curr_efi}")
+
+		for fstab_efi in $fstab_efis; do
+			f_parts=("${(s:;:)fstab_efi}")
+
+			if [[ $f_parts[3] = $c_parts[2] ]]; then
+			 	if [[ $f_parts[1] != $c_parts[1] ]]; then
+					miss_mounted+=("$c_parts[2];$c_parts[1];$f_parts[1];$f_parts[2]")
+					miss_mounts+=("${${c_parts[2]}//?/X}")
+					miss_mounts+=("${${f_parts[1]}//?/X}")
+				fi
+
+				break
+			fi
+
+		done
+	done
+
+	local miss_mount parts m_width
+
+	if [[ -n $miss_mounted ]]; then
+		cat <<-EOF | print_box --align=left
+			Current mount points for EFI system partitions do not
+			corespond to those defined in "fstab" fix "fstab" be-
+			fore continuing.
+		EOF
+
+
+		m_width=${#${(O)miss_mounts}[1]}
+		for miss_mount in $miss_mounted; do
+			parts=("${(s:;:)miss_mount}")
+
+			print_off "${color_y}Current mount:${color_n} ${(r:$m_width:)parts[2]}  UUID=$parts[1]"
+			print_off "${color_y}Fstab mount:${color_n}   ${(r:$m_width:)parts[3]}  $parts[4]"
+			echo
+		done
+
+		exit 1
+	fi >&2
+
+	# check if efi mount points defined in fstab exist
+	# on filesystem, if not alert user and demand fix
+	#
+	miss_mounted=()
+	miss_mounts=()
+
+	for fstab_efi in $fstab_efis; do
+		f_parts=("${(s:;:)fstab_efi}")
+
+		if [[ ! -e $f_parts[1] ]]; then
+				miss_mounted+=("Missing dir:;$f_parts[1];$f_parts[2]")
+				miss_mounts+=("${${f_parts[1]}//?/X}")
+		elif [[ ! -d $f_parts[1] ]]; then
+				miss_mounted+=("Not a dir:  ;$f_parts[1];$f_parts[2]")
+				miss_mounts+=("${${f_parts[1]}//?/X}")
+		fi
+	done
+
+	if [[ -n $miss_mounted ]]; then
+		cat <<-EOF | print_box --align=left
+			Some mount points for EFI system partitions defined
+			in fstab, either don't exist or are not directories.
+			Fix fstab before continuing.
+		EOF
+
+		m_width=${#${(O)miss_mounts}[1]}
+
+		for miss_mount in $miss_mounted; do
+			parts=("${(s:;:)miss_mount}")
+
+			print_off "${color_y}$parts[1]${color_n} ${(r:$m_width:)parts[2]}  $parts[3]"
+		done
+		echo
+
+		exit 1
+	fi >&2
+
+
+	BLS_BACKUP_MOUNTS+=("${(@)fstab_efis}")
+	# echo "efi mounts" >&2
+	# echo ${(j:\n:)BLS_BACKUP_MOUNTS} >&2
+}
+
+get_config_mounts(){
+	local system_mounts=("${(@)BLS_BACKUP_MOUNTS}")
+	local fstab_mounts=("${(@f)$(list_fstab_mounts)}")
+
+	local system_mpoints=("${(@f)$(
+		local mount
+
+		for mount in $system_mounts; do
+			echo ${mount%%;*}
+		done
+	)}")
+
+
+	local fstab_mpoints=("${(@f)$(
+		local mount
+
+		for mount in $fstab_mounts; do
+			echo ${mount%%;*}
+		done
+	)}")
+
+	local config_mounts=("${(@f)$(
+		local c_mount s_mount
+		local conf_mounts=()
+		local miss_mounts=()
+		local noblk_mounts=()
+		local nodir_mounts=()
+
+		for c_mount in $BLS_CONFIG_MOUNTS; do
+
+			# normalize directory path
+			#
+			mount=$c_mount
+			regexp-replace mount '\/+' '/'
+			[[ $mount != '/' ]] && regexp-replace mount '\/$' ''
+
+			# check if mount point defined in fstab
+			#
+			s_mount=${(M)fstab_mpoints:#$mount}
+			[[ -z $s_mount ]] && miss_mounts+=("Missing mount:$c_mount") && continue
+
+			# check if mount point is of block device
+			#
+			s_mount=${(M)fstab_mounts:#${mount};*}
+			s_mount=${s_mount##*;}
+			[[ -z $s_mount ]] && noblk_mounts+=("Noblk mount:$c_mount") && continue
+
+			# check if mount point (directory) exists and
+			# is directory
+			#
+			[[ ! -d $mount ]] && nodir_mounts+=("Nodir mount:$c_mount") && continue
+
+
+			s_mount=${(M)system_mpoints:#$mount}
+			[[ -n $s_mount ]] && continue
+
+			s_mount=${(M)fstab_mounts:#$mount;*}
+			conf_mounts+=("$s_mount")
+		done
+
+		[[ -n $miss_mounts  ]] && echo ${(j:\n:)miss_mounts}  && noblk_mounts=() && nodir_mounts=()
+		[[ -n $noblk_mounts ]] && echo ${(j:\n:)noblk_mounts} && nodir_mounts=() && miss_mounts="xxx"
+		[[ -n $nodir_mounts ]] && echo ${(j:\n:)nodir_mounts} && miss_mounts="xxx"
+
+		[[ -z $miss_mounts  ]] && echo ${(j:\n:)conf_mounts}
+	)}")
+
+	if [[ $config_mounts =~ '^(Missing|Noblk|Nodir) mount:'  ]]; then
+		if [[ $config_mounts =~ '^Missing mount:'  ]]; then
+			cat <<-EOF | print_box --align=left
+				Config key 'mounts' contains mount points not exis-
+				ting in "fstab".
+			EOF
+		elif [[ $config_mounts =~ '^Noblk mount:'  ]]; then
+			cat <<-EOF | print_box --align=left
+				 Config key 'mounts' contains mount points that are
+				 not of block (disk) device(s). We can't use those.
+			EOF
+		else
+			cat <<-EOF | print_box --align=left
+				 Config key 'mounts' contains mount points that are
+				 present in "fstab" but non existing on  filesystem
+				 (directory either don't exist or is a file).
+			EOF
+		fi
+
+		local item
+		local val_prefix="Invalid mount:"
+
+		for item in $config_mounts; do
+			print_off "${color_y}${(r:14:)val_prefix}${color_n} ${item#*:}"
+			val_prefix=""
+		done
+
+		echo
+
+		exit 1
+	fi >&2
+
+	BLS_BACKUP_MOUNTS+=("${(@)config_mounts}")
+	# echo "config mounts" >&2
+	# echo ${(j:\n:)BLS_BACKUP_MOUNTS} >&2
+}
+
+
+
+###############################################
+# partition & disk functions
+#
+check_efi_partitions(){
+	# check if there are any EFI system parititons on system.
+	# If no present, refuse to continue since this backup 
+	# tools is only for 'EFI' systems.
+	#
+	local efis=($(find_system_efis))
+	local action=$1
+
+	[[ -n $efis ]] && return
+
+	cat <<-EOF | print_box --align=left
+		 There are  no  EFI system partitions  present. You
+		 are trying to ${(l:7:)action} system on NON EFI host. This
+		 utility is only ment for systems with EFI bios.
+
+		 YOU CAN'T USE 'bls' TOOL ON THIS HOST!
+	EOF
+
+	print_off "${color_y}Exiting ...${color_n}"
+
+	exit 1
+}
+
+list_fstab_mounts(){
+	cat $BLS_FSTAB |
+	perl -ne'
+		next if /^\s*#/;
+		next if /^\s*$/;
+
+		/^(\w+=(([\x27"]).+?\g-1|\S+)|\S+)\s+(([\x27"]).+?\g-1|\S+)/;
+
+		$mount_point = $4;
+		$fstab_path  = $1;
+
+		$mount_point =~ s/\/\/+/\//g;
+		$mount_point =~ s/\/+$//;
+		$mount_point = "/" if ($mount_point eq "");
+
+		next if ($mount_point eq "none");
+
+		if ($fstab_path =~ /^\//){
+			$mount_path = $fstab_path;
+		}else{
+			$mount_path = `findfs $fstab_path 2>/dev/null`;
+		}
+
+		chomp $mount_path;
+
+		if ($mount_path eq ""){
+			$uuid = "";
+		}else{
+			$uuid = `lsblk -no UUID $mount_path 2>/dev/null`;
+			chomp $uuid;
+		}
+
+		print ("$mount_point;$fstab_path;$uuid\n");
+	'
+}
+
+find_system_efis(){
+	lsblk -no PARTTYPE,UUID |
+	grep -E "^c12a7328-f81f-11d2-ba4b-00a0c93ec93b" |
+	awk '{print $2}'
+}
+
+find_fstab_root(){
+	local fstab_entry
+	local entry_parts
+	local mount_point
+
+	list_fstab_mounts |
+	while  read fstab_entry; do
+		fstab_parts=("${(@s:;:)fstab_entry}")
+		mount_point=$fstab_parts[1]
+		[[ $mount_point[1] = '/' ]] && echo $fstab_entry && break
+	done
+}
+
+find_fstab_efis(){
+	
+	# find EFS partition
+	# 
+	local efi_type='c12a7328-f81f-11d2-ba4b-00a0c93ec93b'
+
+	local fstab_entry
+	local entry_parts
+	local part_type partition
+
+	list_fstab_mounts |
+
+	while read fstab_entry; do
+		entry_parts=("${(@s:;:)fstab_entry}")
+		partition=$entry_parts[2]
+
+		[[ $partition[1] != '/' ]] && partition=$(findfs $partition 2>/dev/null)
+		[[ ! -b $partition ]] && continue
+
+		part_type=$(lsblk -no PARTTYPE $partition 2>/dev/null)
+
+		[[ $part_type = $efi_type ]] && echo ${fstab_entry}
+	done
+}
+
+mdadm_scan(){
+
+	(
+		local devices=($( lsblk -o PATH,TYPE |
+			grep -E '(disk|part)$' |
+			awk '{print $1}'
+		))
+
+		{
+			grep -E -v '^\s*ARRAY\s' $MDADM_CONF 
+			mdadm --examine --scan $devices 
+		} > $MDADM_CONF.tmp
+
+		mv $MDADM_CONF.tmp $MDADM_CONF
+	) &
+
+	zprogress wait $! "Scanning for existing mdadm arrays"
+}
+
+mdadm_recreate(){
+
+	local arrays=($(
+		grep -E '^\s*ARRAY\s' $MDADM_CONF |
+		awk '{print $2}' |
+		sort | uniq
+	))
+
+	[[ -z $arrays ]] && return
+
+	(
+		local array
+		for array in $arrays; do
+			[[ -L $array ]] && continue
+			mdadm --assemble --scan $array >/dev/null 2>&1
+		done
+	) &
+
+	zprogress wait $! "Reassembling existing mdadm arrays"
+}
+
+format_restore_partitions(){
+	local error_msg=$(
+		(
+			local m_path
+
+			local -A partitions=("${(@f)$(
+				for m_path in ${(ok)BLS_RESTORE_MOUNTS}; do
+					echo $m_path
+					findfs UUID="$BLS_RESTORE_MOUNTS[$m_path]"
+				done
+			)}")
+
+			local fstype
+			local label
+			local part
+			local uuid
+			local error_msg
+
+			for m_path in ${(ok)partitions}; do
+				part=$partitions[$m_path]
+				label=$(lsblk $part -no LABEL)
+				fstype=$(lsblk $part -no FSTYPE)
+				uuid=$BLS_RESTORE_MOUNTS[$m_path]
+
+				error_msg=$(
+					if [[ $fstype =~ '^(fat|vfat|msdos)' ]]; then
+						[[ -n $label ]] && label=("-n" "$label")
+						mkfs.$fstype $label -i ${uuid/-} $part 3>&1 >/dev/null 2>&3
+
+					elif [[ $fstype =~ '^ext' ]]; then
+						[[ -n $label ]] && label=("-L" "$label")
+						mkfs.$fstype $label -Fq -U $uuid $part 3>&1 >/dev/null 2>&3
+
+					fi |
+					grep -v \
+						-e 'Dirty bit is set' \
+						-e 'Automatically removing dirty bit' \
+						-e 'lowercase labels might not work properly'
+				)
+
+				[[ -n $error_msg ]] && echo $error_msg && exit 1
+			done
+
+			exit 0
+		) &
+
+		zprogress wait $! "Formating restore partitions"
+	)
+
+	# error_msg=$(echo $error_msg | grep -v '^mkfs.')
+
+	[[ -z $error_msg ]] && return
+
+	cat <<-EOF | print_box --align=left
+		Failed to  format system  parititon on  which restore
+		should be performed. Manualy check problem and re run
+		'bls'.
+
+		Exiting ...
+	EOF
+
+	print_off "${color_y}error: ${color_n}$error_msg"
+
+	exit 1
+}
+
+mirror_efi_parititons(){
+	local org_efi
+	local uuid
+	local part
+	local fstype
+	local efi_type='c12a7328-f81f-11d2-ba4b-00a0c93ec93b'
+
+	for uuid in $BLS_RESTORE_MOUNTS; do
+		part=$(findfs UUID=$uuid)
+		fstype=$(lsblk -no PARTTYPE $part)
+		[[ $fstype = $efi_type ]] && org_efi=$part && break
+	done
+
+	mount_chroot_resources
+
+	efi_mirror_script > $BLS_RESTORE_DIR/bin/bls-mirror-efi
+
+	chmod 755 $BLS_RESTORE_DIR/bin/bls-mirror-efi
+
+	local error_msg=$(
+		chroot $BLS_RESTORE_DIR bls-mirror-efi $org_efi 2>&1 &
+
+		zprogress wait $! "Mirroring EFI partitions"
+	)
+
+	rm -f $BLS_RESTORE_DIR/bin/bls-mirror-efi
+
+	umount_chroot_resources
+
+	[[ -z $error_msg ]] && return
+
+	echo
+	echo $error_msg
+
+	exit 1
+}
+
+efi_mirror_script(){
+	cat <<-EOF |
+		__BLS_MIRROR_SCRIPT__
+	EOF
+	base64 -d
+}
+
+
+
+###############################################
+# task commands
+#
+load_task(){
+	local config=$(
+		read_config 2>&1 &
+		zprogress wait $! "Loading configuration"
+	)
+
+	if [[ $config =~ '^Bls config error' ]]; then
+		print_box "Failed to load configuration!"
+
+		echo "$config" |
+		sed -E -e "s/^(.*:)/${color_y}\1${color_n}/" |
+		print_off
+
+		exit 1
+	fi
+
+	eval "$config"
+	check_task
+}
+
+check_task(){
+	# - must have type
+	# - used keys must have value
+	# - valid type:
+	#     - system
+	#     - data
+	#
+	# - valid keys:
+	#     - backup
+	#     - exclude
+	#     - type
+	#     - mounts
+	#
+	# if system:
+	#   - must not have "backup"
+	#   - "mount" can only have absolute paths
+	#   - mount dir(s) must exist (check before execution)
+	#
+	# if data:
+	#   - must not have "mounts"
+	#   - must have "backup"
+	#   - "backup"  can only have absolute paths
+	#   - "backup" must produce files/dirs (check before execution)
+	#
+
+	# check if "type" is set
+	#
+	if [[ ${+BLS_CONFIG_TYPE} -eq 0 ]]; then
+		print_box "Task config error: task type not defined!"
+		exit 1
+	fi
+
+	if [[ ${+BLS_CONFIG_DESC} -eq 0 ]]; then
+		print_box "Task config error: task description not defined!"
+		exit 1
+	fi
+
+	# check for valid types
+	#
+	local valid_types=(data system)
+	local task_type=("${(@)valid_types:*BLS_CONFIG_TYPE}")
+
+	if [[ $#task_type -eq 0 ]] || [[ $#task_type -gt 1 ]]; then
+		print_box "Task config error: invalid task type!"
+
+		print_off "${color_y}Type used:${color_n} ${(j:, :)BLS_CONFIG_TYPE}"
+		print_off "${color_y}Valid task types are:${color_n} system or data!"
+		echo
+		exit 1
+	fi
+	
+	# check for valid config keys
+	#
+	local valid_keys=(TYPE DESC BACKUP EXCLUDE MOUNTS)
+	local task_keys=($(
+		typeset + |
+		awk '
+			$NF ~ "^BLS_CONFIG_" {
+				sub ("^BLS_CONFIG_","",$NF)
+				print $NF
+			}
+		'
+	))
+
+	local invalid_keys=(${task_keys:|valid_keys})
+
+	if [[ -n $invalid_keys ]]; then
+		print_box "Task config error: invalid key(s) used!"
+
+		print_off "${color_y}Invalid keys:${color_n} ${(oLj:, :)invalid_keys}"
+		print_off "${color_y}Valid keys:${color_n}   ${(oLj:, :)valid_keys}"
+		echo
+		exit 1
+	fi
+
+	if [[ $BLS_CONFIG_TYPE = system ]]; then
+		check_system_task
+	else
+		check_data_task
+	fi
+}
+
+check_system_task(){
+	local task_keys=($(
+		typeset + |
+		awk '
+			$NF ~ "^BLS_CONFIG_" {
+				sub ("^BLS_CONFIG_","",$NF)
+				print $NF
+			}
+		'
+	))
+
+	# valid keys in 'system' backup
+	#
+	local valid_keys=(TYPE DESC EXCLUDE MOUNTS)
+	local invalid_keys=(${task_keys:|valid_keys})
+
+	if [[ -n $invalid_keys ]]; then
+		cat <<-EOF | print_box --align=left
+		   Task config error: invalid key(s) used in
+		   'system' backup task!
+		EOF
+
+		print_off "${color_y}Invalid keys:${color_n} ${(oLj:, :)invalid_keys}"
+		print_off "${color_y}Valid keys:${color_n}   ${(oLj:, :)valid_keys}"
+		echo
+		exit 1
+	fi
+
+	# valid keys must not be empty
+	#
+	local task_key task_var empty_keys=()
+
+	for task_key in $valid_keys; do
+		task_var=BLS_CONFIG_${(U)task_key}
+
+		[[ -z ${(P)task_var+1} ]] && continue
+		[[ -z ${(P)task_var} ]] && empty_keys+=($task_key)
+
+	done
+
+	if [[ -n $empty_keys ]]; then
+		print_box "Task config error: task keys withot value!"
+
+		print_off "${color_y}Invalid keys:${color_n} ${(oLj:, :)empty_keys}"
+		echo
+
+		exit 1
+	fi
+
+	# mount values must be absolute paths
+	#
+	local rel_paths=("${(@)BLS_CONFIG_MOUNTS:#/*}")
+	local val_prefix="Invalid values:"
+	local err_val
+
+	if [[ -n $rel_paths ]]; then
+		cat <<-EOF | print_box --align=left
+		   Task config error: 'mounts' key can only have
+		   absolute paths for values!
+		EOF
+
+		for err_val in ${(oL)rel_paths}; do
+			print_off "${color_y}${(r:15:)val_prefix}${color_n} $err_val"
+			val_prefix=""
+		done
+
+		echo
+		exit 1
+	fi
+
+	# mount values must not contain wild cards
+	#
+	local wild_paths=()
+	local wilds
+
+	wilds=("${(M@)BLS_CONFIG_MOUNTS:#*\**}")
+	[[ -n $wilds ]] && wild_paths+=("${(@)wilds}")
+
+	wilds=("${(M@)BLS_CONFIG_MOUNTS:#*\?*}")
+	[[ -n $wilds ]] && wild_paths+=("${(@)wilds}")
+
+
+	if [[ -n $wild_paths ]]; then
+		cat <<-EOF | print_box --align=left
+		    Task config error: 'mounts' key can not have
+		    wild cards (*|?).
+		EOF
+
+		val_prefix="Invalid values:"
+
+		for err_val in ${(oL)wild_paths}; do
+			print_off "${color_y}${(r:15:)val_prefix}${color_n} $err_val"
+			val_prefix=""
+		done
+
+		echo
+		exit 1
+	fi
+
+	
+
+}
+
+check_data_task(){
+	local task_keys=($(
+		typeset + |
+		awk '
+			$NF ~ "^BLS_CONFIG_" {
+				sub ("^BLS_CONFIG_","",$NF)
+				print $NF
+			}
+		'
+	))
+
+	# valid keys in 'data' backup
+	#
+	local valid_keys=(TYPE DESC BACKUP EXCLUDE)
+	local invalid_keys=(${task_keys:|valid_keys})
+
+	if [[ -n $invalid_keys ]]; then
+		cat <<-EOF | print_box --align=left
+		   Task config error: invalid key(s) used in
+		   'data' backup task!
+		EOF
+
+		print_off "${color_y}Invalid keys:${color_n} ${(oLj:, :)invalid_keys}"
+		print_off "${color_y}Valid keys:${color_n}   ${(oLj:, :)valid_keys}"
+		echo
+		exit 1
+	fi
+
+
+	# backup must be used
+	#
+	if [[ -z ${BLS_CONFIG_BACKUP+1} ]]; then
+		print_box "Task config error: 'backup' key not defined!"
+		exit 1
+	fi
+
+
+	# valid keys must not be empty
+	#
+	local task_key task_var empty_keys=()
+
+	for task_key in $valid_keys; do
+		task_var=BLS_CONFIG_${(U)task_key}
+
+		[[ -z ${(P)task_var+1} ]] && continue
+		[[ -z ${(P)task_var} ]] && empty_keys+=($task_key)
+
+	done
+
+	if [[ -n $empty_keys ]]; then
+		print_box "Task config error: task keys withot value!"
+
+		print_off "${color_y}Empty key(s):${color_n} ${(oLj:, :)empty_keys}"
+		echo
+
+		exit 1
+	fi
+
+	# backup values must be absolute paths
+	#
+	local rel_paths=("${(@)BLS_CONFIG_BACKUP:#/*}")
+	local val_prefix="Invalid values:"
+	local err_val
+
+	if [[ -n $rel_paths ]]; then
+		cat <<-EOF | print_box --align=left
+		   Task config error: 'backup' key can only have
+		   absolute paths for values!
+		EOF
+
+		for err_val in ${(oL)rel_paths}; do
+			print_off "${color_y}${(r:15:)val_prefix}${color_n} $err_val"
+			val_prefix=""
+		done
+
+		echo
+		exit 1
+	fi
+}
+
+
+
+###############################################
+# config commands
+#
+read_config(){
+
+	export BLS_TASK
+
+	cat $BLS_CONFIG |
+	perl -ne '
+		$bls_block = lc ($ENV{"BLS_TASK"});
+
+	    $testing = 0;
+		$testing = 1 if ($bls_block eq "__bls_testing__");
+
+		# comment line
+		# 
+		if (/^\s*#/) {next}
+
+		# empty line
+		#
+		if (/^\s*$/) {next}
+
+		$org_line = $_;
+
+		s/^\s+//;
+		chomp;
+
+		# begining of the block
+		#
+		if (/^\s*\[\s*([^\]]*?)\s*\]([^#]*)/){
+			$block_name = lc ($1);
+			$rest  = $2;
+			$rest  =~ s/\s+//;
+
+			if ($block_name =~ /\s/){
+				$curr_block = "TESTING";
+				print STDERR "Bls config error [line $.]: wrong block name!\n";
+
+				next if $testing;
+				$exiting = 1;
+				exit (1);
+			}
+
+			if ($block_name eq "" or $rest ne ""){
+				$curr_block = "TESTING";
+				print STDERR "Bls config error [line $.]: wrong block definition!\n";
+
+				next if $testing;
+				$exiting = 1;
+				exit (1);
+			}
+
+			$block_name =~ s/\s+/_/;
+			$block_name =~ s/_+/_/;
+
+
+			# when we encounter a block with different name end
+			# parsing a file
+			#
+			if ($curr_block ne "" and $block_name ne $curr_block){
+				next if $testing;
+				exit (0);
+			}
+
+			# ignore block we are not sourcing
+			#
+			if ($block_name ne $bls_block){
+				next if not $testing;
+			}
+
+			%block = ();
+			$curr_variable = "";
+			@curr_values   = "";
+			$curr_block  = $block_name;
+			next;
+		}
+
+		next if ($curr_block eq "" and not $testing);
+
+	    # variable
+		#
+		/^([^:"\x27]+):\s*((["\x27])(.*)?\g-2|([^"\x27#]*?)|(.*))\s*(#.*|$)/;
+
+
+		# we found misformated variable entry
+		#
+		if ($1 ne "" and $6 ne ""){
+			print STDERR "Bls config error [line $.]: misformated variable definition!\n";
+
+			next if $testing;
+			$exiting = 1;
+			exit (1);
+		}
+
+
+		# we found variable
+		#
+		if ($1 ne ""){
+
+			# if not in block this is error
+			#
+			if ($curr_block eq ""){
+				print STDERR "Bls config error [line $.]: variable before block definition!\n";
+
+				next if $testing;
+				$exiting = 1;
+				exit (1);
+			}
+
+			$var_name = uc ($1);
+
+			if ($var_name =~ /\s/){
+				print STDERR "Bls config error [line $.]: wrong variable name\n";
+
+				next if $testing;
+				$exiting = 1;
+				exit (1);
+			}
+
+			$value = $4 . $5;
+
+			# $value =~ s/\/+/\//g;
+			# $value =~ s/\*+/\*/g;
+			# $value =~ s/\/+$// if ($value ne "/");
+
+			my @values = ();
+			push (@values, $value) if ($value ne "");
+
+			if (exists ($block{$var_name})){
+				push (@{$block{$var_name}}, @values);
+
+			}else{
+				$block{$var_name} = \@values;
+
+			}
+
+			next;
+		}
+
+	    
+	    # if here this is item line
+		#
+		/^((["\x27])(.*)?\g2|([^"\x27#]*?))\s*(#.*|$)/;
+
+		if ($1 eq ""){
+			print STDERR ("Bls config error [line $.]: misformated variable value!\n");
+
+			next if $testing;
+			$exiting = 1;
+			exit (1);
+		}
+
+		# if not in variable this is error
+		#
+		if ($var_name eq ""){
+			print STDERR "Bls config error [line $.]: variable value before variable definition!\n";
+
+			next if $testing;
+			$exiting = 1;
+			exit (1);
+		}
+
+		# ignore empty values
+		#
+		next if ($1 eq "");
+
+
+		$value = $3 . $4;
+
+		# $value =~ s/\/+/\//g;
+		# $value =~ s/\*+/\*/g;
+		# $value =~ s/\/+$// if ($value ne "/");
+
+		push (@{$block{$var_name}}, $value);
+
+		END{
+			if ($exiting or $testing){exit}
+
+			if (not %block){
+				print STDERR "Bls config error: block \"$bls_block\" not found!\n";
+
+				exit 1;
+			}
+
+			for $key (keys(%block)){
+				print "BLS_CONFIG_$key=(\n";
+				for $item (@{$block{$key}}){
+					$item =~ s/"/\\"/g;
+					print "  \"$item\"\n";
+				}
+				print (");\n");
+				print ("\n");
+			}
+		}
+	'
+}
+
+check_config_file(){
+
+	if [[ ! -f $BLS_CONFIG ]]; then
+		create_config_file &
+		zprogress wait $! "Creating default config file"
+	fi
+
+	BLS_TASK="__BLS_TESTING__"
+
+	local config_file=$(
+		read_config 2>&1 &
+		zprogress wait $! "Checking configuration"
+	)
+
+	[[ ! $config_file =~ '^Bls config error' ]] && return
+
+	print_box "There are errors in configuration file!"
+
+	echo "$config_file" | sed -e 's/^Bls config error /   /'
+	echo ""
+
+	exit 1
+}
+
+create_config_file(){
+	cat <<-EOF |
+	EOF
+		__BLS_CONFIG_FILE__
+	base64 -d > $BLS_CONFIG
+}
+
+
+
+###############################################
+# samba functions
+#
+get_smb_version(){
+	local server=$1
+
+	local version=$(
+		nmap -n -Pn -p 445 \
+			--unprivileged \
+			--script smb-protocols \
+			$server |\
+
+		awk '
+			/   dialects:/{show = 1; next}
+			show {
+				if ($1 == ""){show = 0; next}
+				version=$2
+			}
+			END {print version}
+		'
+	)
+
+	[[ -z $version ]] && version="2.0"
+
+	echo $version
+}
+
+free_samba_mount(){
+
+	if ! unmount_smb_share; then
+		echo
+		cat <<-EOF | print_box --align=left
+			    Something is already mounted on backup mount,
+			    but we  failed to unmount directory! Manually
+			    unmount directory and rerun 'bls'.
+		EOF
+
+		local mount=$(mount | awk -v mnt=$SAMBA_MOUNT '$3 == mnt{print}')
+		local mount_what=${mount% on ${SAMBA_MOUNT}*}
+		local mount_type=${${mount#* type }% *}
+
+		if [[ $mount_type = cifs ]]; then
+			local mount_data=(${(s:/:)mount_what})
+			local server=$(
+				host $mount_data[1] |
+				awk '/domain name pointer/{
+					sub (".$","",$NF)
+					print $NF
+				}'
+			)
+
+			server=${server:-$mount_data[1]}
+
+			echo
+			print_off "${color_y}Dir:       ${color_n}$SAMBA_MOUNT"
+			print_off "${color_y}Server:    ${color_n}$server"
+			print_off "${color_y}Share:     ${color_n}$mount_data[2]"
+			echo
+		else
+			echo
+			print_off "${color_y}Dir:       ${color_n}$SAMBA_MOUNT"
+			print_off "${color_y}Mounted:   ${color_n}$mount_what"
+			echo
+		fi
+
+		print_off "${color_y}Error msg: ${color_n}${${ERROR_MESSAGE##*: }%.}"
+		echo
+
+		SAMBA_MOUNT=""
+		exit 1
+	fi >&2
+}
+
+free_restore_mounts(){
+
+	if ! unmount_restore_dirs; then
+		echo
+		cat <<-EOF | print_box --align=left
+			    Something is already mounted on restore mounts,
+			    but we  failed to unmount directory! Manually
+			    unmount directory and rerun 'bls'.
+		EOF
+
+		print_off "${color_y}Error msg: ${color_n}${${ERROR_MESSAGE#*: }%.}"
+		echo
+
+		BLS_RESTORE_DIR=""
+		exit 1
+	fi >&2
+
+	rmdir $BLS_RESTORE_DIR 2>/dev/null
+}
+
+mount_smb_share(){
+
+
+	[[ ! -d $SAMBA_MOUNT ]] && mkdir $SAMBA_MOUNT
+
+	local smb_login=()
+
+	[[ -n $SAMBA_LOGIN ]]&& smb_login=("user=${SAMBA_LOGIN}")
+	smb_login+=("password=${SAMBA_PASSWD}")
+
+	local smb_version=$(get_smb_version $SAMBA_IP)
+	local smb_options=("-o" "${(j:,:)smb_login},vers=${smb_version:0:1}.0")
+
+	local error_msg=$(
+		(
+			local error_msg=$(
+				mount -t cifs \
+					$smb_options \
+					//${SAMBA_IP}/${SAMBA_SHARE} \
+					$SAMBA_MOUNT 2>&1 |
+
+				grep -Ev '^Refer to the mount.cif'
+			) 
+
+			echo $error_msg
+			
+			[[ -n $error_msg ]] && exit 1
+			exit 0
+		) &
+
+		zprogress wait $! "Mounting samba share"
+	)
+
+	# echo "---------------------"
+	# echo $error_msg
+	# echo "---------------------"
+
+	if [[ -n $error_msg ]]; then
+		echo
+		print_box "Failed to mount samba share!"
+		print_off "${color_y}Error message:${color_n} ${error_msg#*(?): }"
+		echo
+
+		exit 1
+	fi >&2
+}
+
+tag_smb_share(){
+	[[ -f $BLS_TAG ]] && return
+
+	local error_msg=$(
+		touch $BLS_TAG 2>&1
+		zprogress wait $! "Tagging share as backup storage"
+	)
+
+	[[ -f $BLS_TAG ]] && return
+
+	print_box "Failed to tag samba share as backup storage!"
+	print_off "${color_y}Error: ${color_n}$error_msg"
+
+	exit 1
+}
+
+unmount_smb_share(){
+	[[ -n $SAMBA_MOUNT ]] || return 0
+	[[ -d $SAMBA_MOUNT ]] || return 0
+
+	local mount=$(mount | awk -v mnt=$SAMBA_MOUNT '$3 == mnt{print}')
+
+	[[ -z $mount ]] && return
+
+	ERROR_MESSAGE=$(
+		umount -q $SAMBA_MOUNT 2>&1 &
+		zprogress wait $! "Unmounting samba share"
+	)
+
+
+	[[ -n $ERROR_MESSAGE ]] && return 1
+
+	rmdir $SAMBA_MOUNT 2>/dev/null
+	return 0
+}
+
+unmount_restore_dirs(){
+	[[ -n $BLS_RESTORE_DIR ]] || return 0
+	[[ -d $BLS_RESTORE_DIR ]] || return 0
+
+	local mounts=("${(@f)$(
+		mount |
+		awk -v mnt="^${BLS_RESTORE_DIR}" '$3 ~ mnt {print}' |
+		sed -e 's/^.* on //' |
+		sed -e 's/ type .*$//' |
+		sort -r
+	)}")
+
+	[[ -z $mounts ]] && return
+
+	ERROR_MESSAGE=$(
+		(
+			local mount
+			for mount in $mounts; do
+				umount -q $mount 2>&1 || break
+			done
+		) &
+
+		zprogress wait $! "Unmounting restore mounts"
+	)
+
+	[[ -n $ERROR_MESSAGE ]] && return 1
+
+	rmdir $BLS_RESTORE_DIR 2>/dev/null
+	return 0
+}
+
+
+
+###############################################
+# selection functions
+#
+select_task(){
+
+	local tasks=("${(@f)$(collect_backup_tasks)}")
+
+	if [[ -z $tasks ]]; then
+		cat <<-EOF | print_box
+			There are no tasks defined in config file!
+			Define task and run 'bls' again.
+		EOF
+
+		print_off "${color_y}Config file:${color_n} $BLS_CONFIG"
+		echo
+
+		exit 1
+	fi
+
+	# print_off  "${color_y}"
+	# print_off  "========================================================="
+	# print_off  "You have not defined backup  task in command line. Select"
+	# print_off  "backup task from below given list:"
+	# print_off  "========================================================="
+	# print_off  "${color_n}"
+
+	local task
+
+	zmenu select task \
+		--no-bottom-line \
+		--width 57  \
+		--color "b y g b" \
+		--align "r l c l" \
+		--spaces "1 ' [' '] '" \
+		--title "${color_b}Select task:" \
+		$tasks
+
+	if [[ -z $task ]]; then
+		print_box "No backup task has been selected. Exiting ..."
+		exit 1
+	fi
+
+	echo
+	BLS_TASK="${tasks[$task]%%;*}"
+}
+
+select_smb_server(){
+	[[ -n $SAMBA_IP ]] && return
+
+	local smb_servers=("${(@f)$(
+		collect_smb_servers &
+		zprogress wait $! "Collecting samba servers on network"
+	)}")
+
+	if [[ -z $smb_servers ]]; then
+		echo
+		print_box "Failed to find any samba server on network!"
+		echo
+
+		exit 1
+	fi
+
+	local server
+	local servers=()
+	local smb_server
+	local parts
+
+	for server in "${(@)smb_servers}"; do
+		parts=("${(@s:;:)server}")
+		servers+=("$parts[2];$parts[1];")
+	done
+
+	echo
+	zmenu select smb_server \
+		--no-bottom-line \
+		--width 57  \
+		--color "b y" \
+		--align "r l" \
+		--spaces "1 ' [' ']'" \
+		--title "${color_b}Select server:" \
+		$servers
+
+	echo
+
+	if [[ -z $smb_server ]]; then
+		echo
+		print_box "You have not selected any server!"
+		echo
+
+		exit 1
+	fi
+
+	SAMBA_IP=${smb_servers[$smb_server]%;*}
+	SAMBA_SERVER=${smb_servers[$smb_server]#*;}
+}
+
+select_smb_share(){
+	[[ -n $SAMBA_SHARE ]] && return
+
+	local smb_login
+	local smb_password
+
+	echo
+	echo
+	print_off "${color_b}Enter login and password:${color_n}"
+	print_off "---------------------------------------------------------"
+	print_off "${color_y}Server:${color_n} $SAMBA_SERVER"
+
+	echo -n "\n${move_up}"
+	print_off -n "${color_y}Login:${color_n}  "
+	read smb_login
+
+	if [[ -n $smb_login ]]; then
+		echo -n "\n${move_up}"
+		print_off -n "${color_y}Passwd:${color_n} "
+		read -s smb_password
+		echo
+	fi
+
+	echo
+	smb_shares=("${(@f)$(
+		collect_server_shares $SAMBA_IP $smb_login $smb_password &
+		zprogress wait $! "Collecting server shares"
+	)}")
+
+	if [[ -z $smb_shares ]]; then
+		echo
+		print_box "Failed to find any share on server!"
+		echo
+
+		exit 1
+	fi
+
+	local shares=("${(@)smb_shares#*;*;}")
+	local smb_share
+
+	echo
+	zmenu select smb_share \
+		--no-bottom-line \
+		--width 57  \
+		--color "b y g" \
+		--align "r l l" \
+		--title "${color_b}Select share:" \
+		"${(@)shares}"
+
+	if [[ -z $smb_share ]]; then
+		echo
+		print_box "You have not selected any share!"
+		echo
+
+		exit 1
+	fi
+
+	smb_share=("${(@s:;:)smb_shares[$smb_share]}")
+
+	SAMBA_IP=$smb_share[1]
+	SAMBA_SERVER=$smb_share[2]
+	SAMBA_SHARE=$smb_share[3]
+	SAMBA_LOGIN=$smb_login
+	SAMBA_PASSWD=$smb_password
+
+	echo
+
+}
+
+select_backup_restore(){
+	local backups=()
+	local backup_type
+
+	if [[ $BLS_RUN_MODE = 'rescue' ]]; then
+		backup_type='system'
+	else
+		backup_type='data'
+	fi
+
+	collect_backups
+
+	local backup_dirs=("${(@f)$(
+		local backup
+
+		echo ${(j:\n:)${(@M)BLS_BACKUP_LIST:#${BLS_BACKUP_HOST}/*}/#/${SAMBA_MOUNT}/} |
+
+		while read backup; do
+			task=$(cat $backup/.bls-backup)
+			[[ $task =~ "^${backup_type}" ]] && echo $backup
+		done |
+		sort -V
+	)}")
+
+	backups+=("${(@f)$(
+		local backup
+		local parts
+		local task
+		local desc
+
+		for backup in $backup_dirs; do
+			task=$(cat $backup/.bls-backup)
+			desc=$(cat $backup/.description)
+
+			backup=${backup#$SAMBA_MOUNT/}
+			backup=${backup//\//;}
+			backup=$(echo $backup | sed -E -e 's/_(..)x(..)$/;\1:\2/')
+
+			parts=("${(@s:;:)backup}")
+
+			echo "$parts[2];$backup_type;$parts[3];$parts[4];$desc"
+		done
+	)}")
+
+
+	if [[ -z $backups ]]; then
+		if [[ $backup_type = system ]]; then
+			cat <<-EOF | print_box --align=left
+				  You are runing Linux from rescue CD.  You can only
+				  restore system, but on selected server/share there
+				  is no 'system' backups!
+
+				  Exiting ...
+			EOF
+		else
+			local run_mode='normal running'
+			[[ $BLS_RUN_MODE = chroot ]] && run_mode='chrooted'
+
+			cat <<-EOF | print_box --align=left
+				This is ${run_mode} system. You can only restore
+				data from backup, but on selected server/share there
+				are no 'data' backups!
+
+				Exiting ...
+			EOF
+		fi
+
+		print_off "${color_y}Server: ${color_n}$SAMBA_SERVER"
+		print_off "${color_y}Share:  ${color_n}$SAMBA_SHARE"
+
+		exit 1
+	fi
+
+	local restore
+
+	echo
+	zmenu select restore\
+		--no-bottom-line \
+		--width 57  \
+		--color "b y g c c b" \
+		--align "r l l l l" \
+		--spaces "1 ' [' '] [' 2 '] '" \
+		--title "${color_b}Select backup to restore:" \
+		$backups
+
+	if [[ -n $restore ]]; then
+		BLS_RESTORE=$backup_dirs[$restore]
+		return
+	fi
+
+	cat <<-EOF | print_box
+		You have not selected any backup!
+		Exiting ...
+	EOF
+
+	exit 1
+}
+
+select_backup_delete(){
+	local __container=$1; shift
+
+	select_backup_host
+
+	# get list of backups on server/share
+	#
+	echo
+
+	local __backups=("${(@f)$(
+		get_list_of_backups &
+		zprogress wait $! "Creating list of backups" 
+	)}")
+
+	if [[ -z $__backups ]]; then
+		print_box "There are no backups on selected share!"
+
+		exit 1
+	fi
+
+	# select backup you want to delete
+	#
+	local __menu_prompt=""
+
+	__menu_prompt+="[${color_g}ENTER: ${color_n}select] "
+	__menu_prompt+="[${color_g}CTRL+X: ${color_n}end] "
+	__menu_prompt+="[${color_g}CTRL+C: ${color_n}quit] "
+	__menu_prompt+="[${color_g}Use: ${color_c}PageUp PageDown Home End${color_n}] "
+
+	local __selection
+
+	clear
+	zmenu select __selection \
+		--multy \
+		--align "r l l c r l" \
+		--color "b b g g b c c b" \
+		--spaces "1 1 2 ' [' '] ' ' [' 1 '] ' 2" \
+		--prompt "$__menu_prompt" \
+		--header "Host;Task;Type; Size;Time;;Description"\
+		--width 57  \
+		--title "${color_y}Select backups to delete:" \
+		$__backups
+
+	local __result=()
+	local i
+	for i in $__selection; do
+		__result+=("${__backups[$i]}")
+	done
+
+	eval "$(typeset -p __result | sed -e "s/typeset -a __result/$__container/")"
+}
+
+select_backup_host(){
+	collect_backups
+
+	if [[ -z $BLS_BACKUP_LIST ]]; then
+		print_box "Failed to find any backups on server"
+
+		exit 1
+	fi
+
+	local -U hosts=("${(@)BLS_BACKUP_LIST%%/*}")
+
+	if [[ $#hosts -le 1 ]]; then
+		BLS_BACKUP_HOST=$hosts
+		return
+	fi
+
+	local all_hosts
+	local focus=1
+
+	if [[ $1 = all ]]; then
+		all_hosts=("   " "g:backups from all systems")
+		focus=$(($#hosts + 2))
+	fi
+
+	local host
+
+	zmenu select host \
+		--focus $focus \
+		--width 57  \
+		--color "b y" \
+		--align "r l" \
+		--title "${color_b}Select name of backuped host:" \
+		$hosts $all_hosts
+
+	if [[ -n $host ]]; then
+		if [[ $host -gt $#hosts ]]; then
+			BLS_BACKUP_HOST='*'
+		else
+			BLS_BACKUP_HOST=$hosts[$host]
+		fi
+
+		return
+	fi
+
+	echo
+	print_box "You have not selected any host!"
+	echo
+
+	exit 1
+}
+
+
+
+###############################################
+# collecting functions
+#
+collect_smb_servers(){
+	# get connected networks
+	#
+	local networks=($(ip -4 -o addr | grep -v ': lo' | awk '{print $4}'))
+
+	# get IPs of samba servers
+	#
+	local smb_servers=($(
+		
+		nmap -n -Pn --unprivileged --open -p 445 \
+			--initial-rtt-timeout=100ms  \
+			--max-rtt-timeout=100ms  \
+			--max-retries=1 \
+			--min-parallelism=25 \
+			$networks |
+			awk '
+				/scan report for/{
+					sub(/[(]/,"",$NF)
+					sub(/)/,"",$NF)
+					print $NF
+				}
+			'
+	))
+
+	# get SMB name for IP
+	# 
+	local smb_ip
+	local smb_name
+
+	for smb_ip in $smb_servers; do
+		smb_name=$(timeout 0.5 nmblookup -A $smb_ip | awk '/<00> -  /{print $1}')
+		[[ -n $smb_name ]] && echo "${smb_ip};${(L)smb_name}"
+	done | sort -t\; -k2
+}
+
+collect_server_shares(){
+	local IP=$1
+	local login=$2
+	local password=$3
+
+	if [[ -n $login ]]; then
+		if [[ -n $password ]]; then
+			login=("-U" "${login}%${password}")
+			password=""
+		else;
+			login=("-U" "$login")
+			password=("-N")
+		fi
+	else
+		password=("-N")
+	fi
+
+	local smb_shares=("${(@f)$(
+		smbclient $login $password -L $IP 2>/dev/null |
+		awk '
+			$2 == "Disk"{
+				share = $1
+				$1 = ""
+				$2 = ""
+				sub (/^ +/,"")
+				print share ";" $0
+			}
+		'
+	)}")
+
+	if [[ -n $smb_shares ]]; then
+		local smb_name=$(timeout 0.5 nmblookup -A $IP | awk '/<00> -  /{print $1}')
+
+		smb_name=${smb_name:-$IP}
+
+		local smb_share
+
+		for smb_share in $smb_shares; do
+			echo "$IP;${(L)smb_name};${smb_share}"
+		done
+
+	fi
+}
+
+collect_backup_tasks(){
+	cat $BLS_CONFIG |
+		awk '
+			# extract task bane
+			#
+			/^[ 	]*\[[ 	]*[^ 	]+[ 	]*\][ 	]*(#.*)?$/{
+				if (data[1] != ""){
+					printf "%s;%s;%s\n", data[1], data[2], data[3]
+
+					data[1] = ""
+					data[2] = ""
+					data[3] = ""
+				}
+
+				sub (/^[ 	]*\[[ 	]*/,"")
+				sub (/[ 	]*\].*/,"")
+
+				data[1] = $0
+			}
+
+			# extract task type
+			#
+			/^[ 	]*type:[ 	]*/{
+				sub (/^[ 	]*type:[ 	]*/,"")
+				sub (/#.*/,"")
+
+				data[2] = $0
+			}
+
+			# extract task description 
+			#
+			/^[ 	]*desc:[ 	]*/{
+				sub (/^[ 	]*desc:[ 	]*/,"")
+				sub (/#.*/,"")
+
+				data[3] = $0
+			}
+
+			END{
+				if (data[1] != "")
+					printf "%s;%s;%s\n", data[1], data[2], data[3]
+			}
+		' |
+	sort
+}
+
+collect_backups(){
+	[[ -f $BLS_TAG ]] || return
+	[[ -n ${BLS_BACKUP_LIST+1} ]] && return
+
+	BLS_BACKUP_LIST=("${(@f)$(
+		(
+			find $SAMBA_MOUNT -name .bls-backup |
+			while read bdir; do
+				bdir=${bdir%/.bls-backup}
+				[[ -f $bdir/.done ]] && echo ${bdir#${SAMBA_MOUNT}/}
+			done 
+		) &
+
+		zprogress wait $! "Collecting backups"
+
+	)}")
+}
+
+
+
+###############################################
+# menu, box and offset print
+#
+print_off(){
+	local offset=3
+	local OFFSET
+	local empty=""
+
+	zparseopts -E -D -A ARGS \
+		-o:=OFFSET \
+		-offset:=OFFSET
+
+	[[ -n $OFFSET ]] && offset=${OFFSET[2]#=}
+
+	local echo_args=()
+	local arg
+
+	for arg in $@; do
+		[[ $arg =~ '^-[^-]' ]] && echo_args+=("$arg") && shift 
+		break
+	done
+
+	local lines
+
+	if [[ $# -eq 0 ]]; then
+		lines=("${(@f)$(cat)}")
+	else
+		lines=("$@")
+	fi
+
+	local line
+
+	for line in "${(@)lines}"; do
+		echo $echo_args "${(l:$offset:)empty}$line"
+	done
+
+
+}
+
+print_box(){
+	local color='color_y'
+	local width=60
+	local align=center
+	local offset=3
+
+	local COLOR WIDTH ALIGH BORDER OFFSET
+
+	zparseopts -E -D -A ARGS \
+		-color:=COLOR   \
+	    -width:=WIDTH   \
+		-align:=ALIGN   \
+		-offset:=OFFSET
+
+	[[ -n $COLOR  ]] && color="color_${${COLOR[2]#=}[1]}"
+	[[ -n $WIDTH  ]] && width=${WIDTH[2]#=}
+	[[ -n $ALIGN  ]] && align=${ALIGN[2]#=}
+	[[ -n $OFFSET ]] && offset=${OFFSET[2]#=}
+
+	local empty=""
+	local lines
+
+	if [[ $# -eq 0 ]]; then
+		lines=("${(@f)$(cat)}")
+	else
+		lines=("$@")
+	fi
+
+	width=$((width - offset))
+
+	echo
+	echo -n ${(P)color}
+	echo "${(l:$offset:)empty}${(l:$width::#:)empty}"
+	echo "${(l:$offset:)empty}#${(l:$((width - 2)):)empty}#"
+
+	local line l_width l_offset r_offset
+
+	for line in "${(@)lines}"; do
+
+		if [[ $align = center ]]; then
+			l_offset=$(((width - $#line - 2) / 2))
+			r_offset=$((width - $#line - l_offset - 2))
+		elif [[ $align = left ]]; then
+			l_offset=1
+			r_offset=$((width - $#line - 3))
+		else
+			l_offset=$((width - $#line - 3))
+			r_offset=1
+		fi
+
+		echo -n "${(l:$offset:: :)empty}#"
+		echo -n "${(l:$l_offset:)empty}"
+		echo -n $line
+		echo -n "${(l:$r_offset:)empty}#"
+		echo
+	done
+
+	echo "${(l:$offset:)empty}#${(l:$((width - 2)):)empty}#"
+	echo ${(l:$offset:: :)empty}${(l:$width::#:)empty}
+	echo -n ${color_n}
+	echo
+}
+
+select_menu_item(){
+	local prompt=$1; shift
+	local footer=$1; shift
+	local header=$1; shift
+	local items=("$@")
+
+	local MENU_ITEMS_SELECTED=()
+	{
+		echo 
+		print_menu_items "$header" "$@" "---"
+
+		if [[ -n $footer ]]; then
+			echo
+			echo ${(j:\n:)footer/#/   }
+			echo
+		fi
+
+		echo
+	} >&3
+
+	# select menu item
+	#
+	local selection
+
+	echo >&3
+
+	while true; do
+		echo -n "${move_up}"
+		echo -n "   $prompt[0K"
+		read selection
+
+		[[ -z $selection ]] && return
+		[[ ! $selection =~ '^[0-9]+$' ]] && continue
+
+		[[ $selection -ge 1 ]] && [[ $selection -le $#items ]] && break
+
+	done >&3
+
+	echo $selection
+}
+
+select_menu_items(){
+	local prompt=$1; shift
+	local footer=("${(s:\n:)1}"); shift
+	local header=$1; shift
+	local items=("$@")
+
+	local line_no=$(($#items + 6))
+
+	[[ -n $footer ]] && line_no=$((line_no + 1 + $#footer))
+
+	local move_to_root="[${line_no}A[1G"
+	local -A MENU_ITEMS_SELECTED=()
+	local selection
+
+	while true; do
+
+		echo 
+		print_menu_items "$header" "$@" "---"
+		echo
+
+		if [[ -n $footer ]]; then
+			echo ${(j:\n:)footer/#/   }
+			echo
+		fi
+
+		echo
+
+		# select menu item
+		#
+		while true; do
+			echo -n "${move_up}"
+			echo -n "   $prompt[0K"
+			read selection
+
+			[[ -z $selection ]] && break
+			[[ ! $selection =~ '^[0-9]+$' ]] && continue
+
+			[[ $selection -ge 1 ]] && [[ $selection -le $#items ]] && break
+		done
+
+		[[ -z $selection ]] && break
+
+		if [[ $MENU_ITEMS_SELECTED[$selection] -eq 1 ]]; then
+			MENU_ITEMS_SELECTED[$selection]=0
+		else
+			MENU_ITEMS_SELECTED[$selection]=1
+		fi
+		echo -n $move_to_root
+	done >&3
+
+	echo ${(kon)MENU_ITEMS_SELECTED[(R)1]}
+}
+
+print_menu_items(){
+	# calculate widths
+	#
+	local items=("$@")
+	local widths=()
+	local parts
+	local row
+	local col
+	local counter=0
+
+	for row in {1..$#items}; do
+		[[ -z $items[$row]         ]] && continue
+		[[ $items[$row] =~ '^---+' ]] && continue
+		[[ $items[$row] =~ '^   +' ]] && continue
+
+		if [[ $row -eq 1 ]]; then
+			items[1]="No.;${items[1]}"
+		else
+			counter=$((++counter))
+			items[row]="$counter.;${items[row]}"
+		fi
+
+		parts=("${(@s:;:)items[$row]}")
+
+		for col in {1..$#parts}; do
+			[[ $widths[$col] -lt ${#parts[$col]} ]] && widths[$col]=${#parts[$col]}
+		done
+	done
+
+
+	local total_width=0
+
+	for col in {1..$#widths}; do
+		total_width=$((total_width + ${widths[$col]} + 2))
+	done
+
+	[[ $total_width -lt 57 ]] && total_width=57
+
+	# widths+=($((60 - 3 - total_width)))
+
+	# print menu
+	#
+	local void=""
+
+	for row in {1..$#items}; do
+		[[ -z $items[$row]         ]] && continue
+
+		if [[ $items[$row] =~ '^---+' ]]; then
+			echo "   ${(l:$total_width::.:)void}"
+			continue
+		elif [[ $items[$row] =~ '^   +' ]]; then
+			echo "   ${(l:$total_width:)void}"
+			continue
+		fi
+
+		parts=("${(@s:;:)items[$row]}")
+
+		echo -n "   "
+		for col in {1..$#parts}; do
+			if [[ $row -ne 1 ]] && [[ $col -eq 1 ]]; then
+				echo -n "${(l:$widths[$col]:)parts[col]}  "
+			else
+				[[ ${MENU_ITEMS_SELECTED[$((row-1))]} -eq 1 ]] && echo -n ${color_y}
+				[[ ${MENU_ITEMS_SELECTED[$((row-1))]} -eq 2 ]] && echo -n ${color_d}
+				 
+				echo -n "${(r:$widths[$col]:)parts[col]}${color_n}  "
+			fi
+		done
+		echo
+
+		[[ $row -ne 1 ]] && continue
+
+		echo "   ${(l:$total_width::.:)void}"
+		continue
+
+		echo -n "   "
+		for col in {1..$#parts}; do
+			echo -n "${(l:$widths[$col]::.:)void}.."
+		done
+		[[ $widths[-1] -gt 0 ]] && echo -n "${(l:$widths[-1]::.:)void}"
+		echo
+
+	done
+}
+
+
+
+###############################################
+# progress, run_as_root
+#
+run_as_root(){
+
+	[[ $(id -u) -eq 0 ]] && return
+
+	print_box --color=red \
+		"You are not root." \
+		"Run this script as root (use sudo)!"
+
+
+	BLS_LOCK=""
+	exit 1
+}
+
+progress_meter(){
+	local process_id=$1
+	local text=$2
+	local text_width=60
+	local dots=$((text_width - 4 - ${#text}))
+	local void=""
+
+	zterm cursor off >/dev/tty
+
+	{
+		echo
+		echo -n "${move_up}"
+		echo -n "   ${color_y}${text}${color_n} ${(l:$dots::.:)void}"
+
+		local spinner_step=1
+		local step_time=0.08
+		local spinner='|/-\'
+
+		while true; do
+			echo -n '[2D' $spinner[$spinner_step]
+			sleep $step_time
+
+			[[ ! -d /proc/$process_id ]] && break
+
+			spinner_step=$((++spinner_step))
+			[[ $spinner_step -gt 4 ]] && spinner_step=1
+		done
+
+		local message=" DONE"
+
+		echo "[${#message}D$message"
+
+	} >&3
+
+	zterm cursor restore >/dev/tty
+}
+
+check_for_bls_instance(){
+
+	if [[ ! -f $BLS_LOCK ]]; then
+		echo $$ > $BLS_LOCK 2>/dev/null
+		return
+	fi
+
+	local pid=$(cat $BLS_LOCK)
+	local running=$(ps -hp $pid)
+
+
+	[[ -z $running ]] && echo $$ > $BLS_LOCK && return
+
+	echo
+	print_box "BLS is laready running" "Can't start another instance!"
+	echo
+
+	BLS_LOCK=""
+
+	exit 1
+}
+

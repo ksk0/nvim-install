@@ -1,20 +1,55 @@
 # list of packages to be installed
 #
-[debian]   
+[common]
 	unzip tar gzip wget curl git cmake xclip
-	python3 python3-pip python3-venv
 
-	luarocks/3.0
-	ruby ruby-dev
-	perl cpanminus
-	rust
-	node
+[arch]
+	unzip tar gzip wget curl git # cmake xclip
+	# python python-pip python-virtualenv
+  # luarocks/3.0
+	# ruby ruby-dev
+	# perl cpanminus
+  # rust
+
+[debian]
+	unzip tar gzip wget curl git # cmake xclip
+	# python3 python3-pip python3-venv
+  # luarocks/3.0
+	# ruby ruby-dev node
+	# perl cpanminus
+  # cargo 
+  # rust
+  # node
+
+[redhat]
+	unzip tar gzip wget curl git # cmake xclip
+	# python3 python3-pip python3-virtualenv
+  # luarocks/3.0
+  # fuse fuse-libs
+  # gcc-c++
+	# ruby ruby-devel
+	# perl perl-App-cpanminus
+  # cargo
+
+# [redhat]
+#   zsh
+#   luarocks/3.0
+
+[suse]
+  unzip tar gzip wget curl git # cmake xclip
+  # python3 python3-pip python3-virtualenv
+  #  lua51-luarocks/3.0
+  #  fuse libfuse2
+	# ruby ruby-devel
+	# perl perl-App-cpanminus
+  #  rust
+  # node
 
 [python]
 	pynvim
 
 [lua]
-	toml LuaSocket
+	toml # LuaSocket
 
 [node]
 	neovim tree-sitter-cli

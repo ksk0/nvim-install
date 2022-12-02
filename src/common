@@ -1,0 +1,452 @@
+#!/usr/bin/zsh
+
+
+BIN_DIR=/usr/local/bin
+UPGRADED=0
+INSTALLED_PACKAGES=()
+FAILED_PACKAGES=()
+AUTO_REMOVE_PKGS=""
+
+NEOVIM_DOWNLOAD_URL="https://github.com/neovim/neovim/releases/latest/download"
+
+__NVIM_SHARE=$HOME/.local/share/nvim
+__NVIM_BRICKS=$__NVIM_SHARE/bricks
+
+__PERL_HOME=$__NVIM_BRICKS/perl5
+__NODE_HOME=$__NVIM_BRICKS/node
+__CARGO_HOME=$__NVIM_BRICKS/cargo
+__PYTHON_HOME=$__NVIM_BRICKS/python
+__RUBY_HOME=$__NVIM_BRICKS/ruby
+__LUA_HOME=$__NVIM_BRICKS/lua
+
+__PERL_LIB=$__PERL_HOME/lib/perl5
+__CARGO_BIN=$__CARGO_HOME/bin
+__RUBY_BIN=$__RUBY_HOME/bin
+
+_NODE_MIN_VERSION=16.0
+
+export CARGO_HOME=$__CARGO_HOME
+
+check_if_root(){
+	[[ $EUID -ne 0 ]] && return
+	[[ -z $SUDO_USER ]] && return
+
+	cat <<-EOF
+		${y}
+		   Run this script as regular user. DO NOT use sudo!
+		${n}
+	EOF
+
+	exit 1
+}
+
+check_linux_flavour(){
+	[[ -n $OS ]] && return 
+
+	if [[ -f /etc/arch-release ]] then
+		OS=arch
+	elif [[ -f /etc/redhat-release ]] then
+		OS=redhat
+	elif [[ -f /etc/debian_version ]] then
+		OS=debian
+	elif [[ -f /etc/os-release ]] then
+		OS=$(source /etc/os-release; echo ${ID_LIKE% *})
+
+		[[ $OS = suse ]] || OS=""
+	fi
+
+	[[ -n $OS ]] && source $SCRIPT_DIR/src/$OS && return
+
+	alert_box --expand "${y}Unable to determin Linux flavour!${n}"
+
+	exit 1
+}
+
+count_success(){
+	INSTALLED_PACKAGES+=("$1;$2;$3")
+}
+
+count_fails(){
+	FAILED_PACKAGES+=("$1;$2;$3")
+}
+
+load_package_list(){
+	typeset -gA REQUIRED_PACKAGES
+
+	REQUIRED_PACKAGES=("${(@f)$(
+		cat $SCRIPT_DIR/packages |
+
+		sed -E \
+			-e 's/#.*//' \
+			-e 's/^\s+//' \
+			-e 's/\s+$//' \
+			-e 's/\s+/ /' \
+			-e 's/\[\s+/\[/' \
+			-e 's/\s+\]/\]/' |
+
+		grep -v '^$'|
+
+		awk '
+			function print_group(){
+				if (packages != ""){
+					print group
+					print(substr(packages,2))
+				}
+			}
+
+			/^\[[^]]+\]$/{
+				if (group != ""){
+					print_group()
+				}
+
+				sub(/\[/,"",$0)
+				sub(/\]/,"",$0)
+
+				group = $0
+				packages=""
+				next
+			}
+
+			{packages = packages " " $0}
+
+			END{
+				print_group()
+			}
+		'
+	)}")
+
+	REQUIRED_PACKAGES[system]="$REQUIRED_PACKAGES[$OS]"
+}
+
+select_package(){
+	local __storage=$1; shift
+	local __selection
+	local __prompt=""
+
+	__prompt+="[${g}ENTER: ${n}select]   "
+	__prompt+="[${g}CTRL+C: ${n}quit]"
+
+	zmenu select __selection\
+		--width 60 \
+		--focus 1 \
+		--color 'g b' \
+		--align 'r l' \
+		--spaces "1" \
+		--no-bottom-line \
+		--title "${b}Select package to install:"\
+		--prompt "$__prompt" \
+		"$@"
+
+	eval "${__storage}=${(P)__selection}"
+}
+
+sys_package_install(){
+	local width=$(tput cols)
+	local result
+
+	if [[ $width -gt 80 ]] then
+		stty cols 80
+	fi
+
+	if [[ $OS = suse ]] then
+		sudo zypper install --no-confirm $1
+		result=$?
+
+	elif [[ $OS = redhat ]] then
+		sudo dnf install -y $1
+		result=$?
+
+	elif [[ $OS = debian ]] then
+		sudo apt-get install --yes $1
+		result=$?
+
+	elif [[ $OS = arch ]] then
+		sudo pacman -S --noconfirm $1
+		result=$?
+	fi
+
+	if [[ $width -gt 80 ]] then
+		stty cols $width
+	fi
+
+	return $result
+}
+
+
+sys_package(){
+	cmd=$1; shift
+
+	case $cmd in
+		action)   sys_package_action   "$@";;
+		provides) sys_package_provides "$@";;
+		version)  sys_package_version  "$@";;
+		install)  sys_package_install  "$@"; return $?;;
+	esac
+}
+
+sys_package_action(){
+		local __action
+		local __store=$1; shift
+		local __package=${1%/*}
+		local __version=${${${(M)1:#*/*}##*/}:-0.0}
+
+		if [[ -n $PROVIDES_PATTERN[$__package] ]]; then
+			sys_package_action_multy  __action $1
+		else
+			sys_package_action_single __action $1
+		fi
+
+		eval "$__store=$__action"
+}
+
+sys_package_action_single(){
+	local action
+	local store=$1; shift
+	local package=${1%/*}
+	local version=${${${(M)1:#*/*}##*/}:-0.0}
+
+	show_alert "Checking [$OS]" "${package}"
+	echo
+
+	local inst_version=$(sys_package version installed $package)
+	local repo_version=$(sys_package version repo $package)
+	local have_version=$(normalize_version $repo_version)
+	local need_version=${(j:.:)${(@s:.:)version}[1,2]}
+
+	echo "Installed: $inst_version"
+	echo "Repo:      $repo_version"
+	echo "Short:     $have_version"
+	echo "Pkg:       $need_version"
+
+	if [[ -n $inst_version ]] && [[ -z $repo_version ]]; then
+		action=keep
+	elif [[ -z $repo_version ]]; then
+		action=missing
+	elif [[ $inst_version = $repo_version ]]; then
+		action=keep
+	elif is_newer $have_version $need_version; then
+		action=old:$have_version:$need_version
+	else
+		action=install:$package
+	fi
+
+	eval "$store=$action"
+}
+
+sys_package_action_multy(){
+	local action
+	local store=$1; shift
+	local package=${1%/*}
+	local version=${${${(M)1:#*/*}##*/}:-0.00}
+	local need_version=${(j:.:)${(@s:.:)version}[1,2]}
+	local repo_packages=()
+	local inst_packages=()
+	local -A valid_packages
+	local -A invalid_packages
+	local -A valid_installed
+	local -A invalid_installed
+	local pkg pkg_name pkg_version nrm_version
+
+	show_alert "Checking [$OS]" "$package"
+
+	sys_package provides repo_packages $package
+
+	# echo REPO PACKAGES: ${(qq)repo_packages}
+
+	# check for already installed packages, their versions
+	# and if they fulfill minimal version criteria
+	#
+	for pkg in $repo_packages; do
+		pkg_name=${pkg%%;*}
+		pkg_version=$(sys_package version installed $pkg_name)
+		nrm_version=$(normalize_version $pkg_version)
+
+		# echo PN:$pkg_name
+		# echo IV:$pkg_version
+		# echo NV:$nrm_version
+
+		if [[ -n $pkg_version ]]; then
+			inst_packages+=("$pkg_name;$pkg_version;$nrm_version")
+
+			if [[ $need_version -gt 0 ]]; then
+				# if [[ $nrm_version -ge $need_version ]]; then
+				if is_newer $nrm_version $need_version; then
+					valid_installed[$pkg_name]=1
+				else
+					invalid_installed[$pkg_name]=1
+				fi
+
+			else
+				valid_installed[$pkg_name]=1
+			fi
+		fi
+	done
+
+	# echo "need: $need_version"
+	#
+	# echo INV: ${(k)invalid_installed}
+	# echo VAL: ${(k)valid_installed}
+	# echo "-------------------"
+
+	if [[ -n $inst_packages ]]; then
+		echo
+		echo "${y}Installed packages:${n}"
+		echo "${n}${(l:80::-:)void}"
+
+		for pkg in $inst_packages; do
+			pkg_name=${pkg%%;*}
+			nrm_version=${pkg##*;}
+
+			if [[ -n $invalid_installed[$pkg_name] ]]; then
+				## validity="${y}(required min is ${need_version})${n}"
+				validity="${n}!! ${y}(< ${need_version})${n}"
+			else
+				validity="${n}OK"
+			fi
+
+			printf "%s%-20s %s%6s      %s\n" ${b} ${pkg_name} ${c} ${nrm_version} $validity
+		done
+	fi
+
+	# for each repo package check if it is valid version
+	#
+	for pkg in $repo_packages; do
+		pkg_name=${pkg%%;*}
+		nrm_version=${pkg##*;}
+
+		if [[ $need_version -gt 0 ]]; then
+			if is_newer $nrm_version $need_version; then
+				valid_packages[$pkg_name]=1
+			else
+				invalid_packages[$pkg_name]=1
+			fi
+
+		else
+			valid_packages[$pkg_name]=1
+		fi
+	done
+
+	# echo INV: ${(k)invalid_packages}
+	# echo VAL: ${(k)valid_packages}
+	# echo "-------------------"
+
+	local validity parts void
+
+	# echo INST: ${(qq)inst_packages}
+
+	if [[ -n $repo_packages ]]; then
+		echo
+		echo "${y}Available packages:${n}"
+		echo "${n}${(l:80::-:)void}"
+
+		for pkg in $repo_packages; do
+			pkg_name=${pkg%%;*}
+			nrm_version=${pkg##*;}
+
+			if [[ -n $invalid_packages[$pkg_name] ]]; then
+				validity="${n}!! ${y}(< ${need_version})${n}"
+			else
+				validity="${n}OK"
+			fi
+
+			printf "%s%-20s %s%6s      %s\n" ${b} ${pkg_name} ${c} ${nrm_version} $validity
+			echo -n ${n}
+		done
+	fi
+
+	# check for
+	# check if installed version are valid
+	echo
+}
+
+is_newer(){
+	local have=$1
+	local need=$2
+
+	have_val=$((${have%.*} * 10000 + ${have#*.}))
+	need_val=$((${need%.*} * 10000 + ${need#*.}))
+
+	[[ $need_val -gt $have_val ]]  && return 1
+
+	return 0
+}
+
+
+normalize_version(){
+	echo $1 | awk '
+		/^[0-9]+\.[0-9]+.*/{
+			split($1,parts,"\\.")
+			# printf("%-25s %-20s A:%d.%d\n",$1, $2, parts[1], parts[2])
+
+			printf("%d.%d\n", parts[1], parts[2])
+			next
+		}
+
+		/^[0-9]+[.:][0-9]+\.[0-9]+.*/{
+			split($1,parts,"[.:]")
+			# printf("%-25s %-20s B:%d.%d\n",$1, $2, parts[1] * 100 + parts[2], parts[3])
+
+			printf("%d.%d\n", parts[1] * 100 + parts[2], parts[3])
+			next
+		}
+
+		/^[0-9]+[.:][0-9]+.*/{
+			split($1,parts,"[.:]")
+			# printf("%-25s %-20s C:%d.%d\n",$1, $2, parts[1], parts[2])
+
+			printf("%d.%d\n", parts[1], parts[2])
+			next
+		}
+
+		/^[0-9]+-[0-9]+.*/{
+			split($1,parts,"-")
+			# printf("%-25s %-20s D:%d.%d\n",$1, $2, parts[1], parts[2])
+
+			printf("%d.%d\n", parts[1], parts[2])
+			next
+		}
+
+		/^[0-9]+*/{
+			# printf("%-25s %-20s E:%d.%d\n",$1, $2, $2, 0)
+			printf("%d.00\n", $2)
+			next
+		}
+
+		{
+			print "0.00"
+			next
+		}
+
+	'
+}
+
+setup_python(){
+	[[ ${+PYTHON_BIN} -eq 1 ]] && return
+
+	install_pkg system $@
+
+	PYTHON_BIN=1
+
+	[[ -z $(which python3 2>/dev/null) ]] && PYTHON_BIN=0 && return
+
+	setup_python_venv
+
+  install_python_pkg pip
+}
+
+setup_python_venv(){
+	local venv_path=$__PYTHON_HOME
+	local venv_cfg=$__PYTHON_HOME/pyvenv.cfg
+	local venv_lib=$__PYTHON_HOME/lib/python3
+
+	[[ -d $venv_path   ]] || python3 -m venv --system-site-packages $venv_path
+
+	local version=$(
+		grep -E '^version\s*=\s*' $venv_cfg |
+		sed -E -e 's/^version\s*=\s*//' |
+		awk -F. '{print $1 "." $2}'
+	)
+
+	[[ -L $venv_lib ]] || ln -s python${version} $venv_lib
+	[[ -z $VIRTUAL_ENV ]] && source $venv_path/bin/activate
+}
