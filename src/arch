@@ -1,0 +1,71 @@
+#!/usr/bin/zsh
+
+OS_NAME=ARCH-X
+
+sys_package_version(){
+	local vtype=$1
+	local pkg=$2
+
+	case $vtype in
+		installed)
+			pacman -Qi $pkg 2>/dev/null | grep '^Version ' | awk '{print $3}'
+			;;
+		repo)
+			pacman -Si $pkg | grep '^Version ' | awk '{print $3}'
+			;;
+	esac
+}
+
+
+install_python(){
+	setup_python python python-pip python-virtualenv
+}
+
+install_luarocks(){
+	[[ ${+LUA_BIN} -eq 1 ]] && return
+
+	LUA_BIN=1
+	install_pkg system gcc cmake make luarocks/3.0 || LUA_BIN=0
+}
+
+install_node(){
+	[[ ${+NODE_BIN} -eq 1 ]] && return
+
+	NODE_BIN=1
+	install_pkg system nodejs npm || NODE_BIN=0
+
+	[[ $NODE_BIN -eq 1 ]] && install_pkg node npm
+}
+
+install_perl(){
+	[[ ${+PERL_BIN} -eq 1 ]] && return
+
+	PERL_BIN=1
+	install_pkg system perl || PERL_BIN=0
+}
+
+install_ruby(){
+	[[ ${+RUBY_BIN} -eq 1 ]] && return
+
+	RUBY_BIN=1
+	install_pkg system ruby ruby-dev  || RUBY_BIN=0
+
+}
+
+install_rust(){
+	[[ ${+RUST_BIN} -eq 1 ]] && return
+
+	RUST_BIN=1
+	install_pkg system rust || RUST_BIN=0
+}
+
+install_neovim(){
+	install_system_package neovim
+}
+
+update_system(){
+	[[ $UPGRADED -eq 1 ]] && return
+
+  echo "Updating system $OS_NAME"
+  UPGRADED=1
+}

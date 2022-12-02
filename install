@@ -2,27 +2,10 @@
 
 autoload -U regexp-replace
 
-BIN_DIR=/usr/local/bin
 SCRIPT_DIR=${0:a:h}
-UPGRADED=0
-INSTALLED_PACKAGES=()
-PACKAGE_INSTALATION=0
-FAILED_PACKAGES=()
 
-NEOVIM_DOWNLOAD_URL="https://github.com/neovim/neovim/releases/latest/download"
-
-__NVIM_SHARE=$HOME/.local/share/nvim
-__NVIM_BRICKS=$__NVIM_SHARE/bricks
-
-__PERL_HOME=$__NVIM_BRICKS/perl5
-__NODE_HOME=$__NVIM_BRICKS/node
-__CARGO_HOME=$__NVIM_BRICKS/cargo
-__PYTHON_HOME=$__NVIM_BRICKS/python
-__LUA_HOME=$__NVIM_BRICKS/lua
-
-__PERL_LIB=$__PERL_HOME/lib/perl5
-__CARGO_BIN=$__CARGO_HOME/bin
-
+source $SCRIPT_DIR/src/zfm
+source $SCRIPT_DIR/src/common
 
 
 #############################################
@@ -43,19 +26,9 @@ init_colors(){
 	else
 		s='[38;5;243m'
 	fi
-}
 
-check_if_root(){
-	[[ $EUID -ne 0 ]] && return
-	[[ -z $SUDO_USER ]] && return
-
-	cat <<-EOF
-		${y}
-		   Run this script as regular user. DO NOT use sudo!
-		${n}
-	EOF
-
-	exit 1
+	zterm init
+	zmenu init
 }
 
 
@@ -81,333 +54,184 @@ exec_help(){
 }
 
 exec_all(){
-	INSTALL_ALL=yes
-
 	install_packages
-	install_neovim
+	# install_neovim
 }
 
 exec_neovim(){
-	install_neovim $@
+	# install_neovim $@
 }
 
 exec_packages(){
 	install_packages
 }
 
-install_neovim(){
-	local app
-	local pkg=deb
-
-	case $pkg in 
-		app) app=nvim.appimage
-			 ;;
-		deb) app=nvim
-			 ;;
-	esac
-
-	if [[ -z $app ]]; then
-
-		cat <<-EOF | alert_box --left
-			${y}
-			  Give package type you want to install:
-			
-			    ${w}app${y}   - install appImage
-			    ${w}deb${y}   - install debian package
-			${n}
-		EOF
-
-		exit 1
-	fi
-
-
-	local is_installed=$(hash $app 2>/dev/null; echo $?)
-
-	if [[ $is_installed -eq 0 ]] && [[ ${+INSTALL_ALL} -eq 1 ]]; then
-		cat <<-EOF | alert_box 
-		
-			Neovim already installed.
-
-			To install it again run: ${w}install-debian neovim${n}
-			${n}
-		EOF
-
-		return
-	fi >&2
-
-
-	case $pkg in
-		app) download_appimage
-			 register_neovim_app nvim.appimage vi  N
-			 register_neovim_app nvim.appimage vim Y
-			 ;;
-		deb) download_deb_pkg
-			 register_neovim_app nvim vi  N
-			 register_neovim_app nvim vim Y
-			 ;;
-	esac
-
-	echo
-}
-
-load_package_list(){
-	typeset -gA REQUIRED_PACKAGES
-
-	REQUIRED_PACKAGES=("${(@f)$(
-		cat $SCRIPT_DIR/packages |
-
-		sed -E \
-			-e 's/#.*//' \
-			-e 's/^\s+//' \
-			-e 's/\s+$//' \
-			-e 's/\s+/ /' \
-			-e 's/\[\s+/\[/' \
-			-e 's/\s+\]/\]/' |
-
-		grep -v '^$'|
-
-		awk '
-			function print_group(){
-				if (packages != ""){
-					print group
-					print(substr(packages,2))
-				}
-			}
-
-			/^\[[^]]+\]$/{
-				if (group != ""){
-					print_group()
-				}
-
-				sub(/\[/,"",$0)
-				sub(/\]/,"",$0)
-
-				group = $0
-				packages=""
-				next
-			}
-
-			{packages = packages " " $0}
-
-			END{
-				print_group()
-			}
-		'
-	)}")
-}
-
-package_version(){
-	awk '
-		/^[0-9]+\.[0-9]+.*/{
-			split($1,parts,"\.")
-			# printf("%-25s %-20s A:%d.%d\n",$1, $2, parts[1], parts[2])
-			printf("%d.%d\n", parts[1], parts[2])
-			next
-		}
-
-		/^[0-9]+[.:][0-9]+\.[0-9]+.*/{
-			split($1,parts,"[.:]")
-			# printf("%-25s %-20s B:%d.%d\n",$1, $2, parts[1] * 100 + parts[2], parts[3])
-			printf("%d.%d\n", parts[1] * 100 + parts[2], parts[3])
-			next
-		}
-
-		/^[0-9]+[.:][0-9]+.*/{
-			split($1,parts,"[.:]")
-			# printf("%-25s %-20s C:%d.%d\n",$1, $2, parts[1], parts[2])
-			printf("%d.%d\n", parts[1], parts[2])
-			next
-		}
-
-		/^[0-9]+-[0-9]+.*/{
-			split($1,parts,"-")
-			# printf("%-25s %-20s D:%d.%d\n",$1, $2, parts[1], parts[2])
-			printf("%d.%d\n", parts[1], parts[2])
-			next
-		}
-
-		/^[0-9]+*/{
-			# printf("%-25s %-20s E:%d.%d\n",$1, $2, $2, 0)
-			printf("%d.0\n", $2)
-			next
-		}
-
-		{
-			print "0.0"
-			next
-		}
-
-	'
-}
-
 install_packages(){
-	PACKAGE_INSTALATION=1
-	INSTALLED_PACKAGES=()
-
 	load_package_list
+	# what_to_install
 
-	install_deb_package ${(s: :)REQUIRED_PACKAGES[debian]}
+	local -A NEED_PKG
 
-	install_python_pkg  ${(s: :)REQUIRED_PACKAGES[python]}
-	install_lua_pkg     ${(s: :)REQUIRED_PACKAGES[lua]}
-	install_node_pkg    ${(s: :)REQUIRED_PACKAGES[node]}
-	install_rust_pkg    ${(s: :)REQUIRED_PACKAGES[rust]}
-	install_ruby_pkg    ${(s: :)REQUIRED_PACKAGES[ruby]}
-	install_perl_pkg    ${(s: :)REQUIRED_PACKAGES[perl]}
+	# NEED_PKG[node]=1
+	# NEED_PKG[lua]=1
+	NEED_PKG[python]=1
+	# NEED_PKG[system]=1
+
+	install_pkg system ${(s: :)REQUIRED_PACKAGES[system]}
+
+	install_pkg node   ${(s: :)REQUIRED_PACKAGES[node]}
+	install_pkg python ${(s: :)REQUIRED_PACKAGES[python]}
+	install_pkg lua    ${(s: :)REQUIRED_PACKAGES[lua]}
+	install_pkg rust   ${(s: :)REQUIRED_PACKAGES[rust]}
+	install_pkg ruby   ${(s: :)REQUIRED_PACKAGES[ruby]}
+	install_pkg perl   ${(s: :)REQUIRED_PACKAGES[perl]}
+}
+
+what_to_install(){
+
+	local selection=()
+	local menu_prompt=""
+
+	menu_prompt+="[${g}ENTER: ${n}select] "
+	menu_prompt+="[${g}CTRL+A: ${n}all] "
+	menu_prompt+="[${g}CTRL+N: ${n}none]   "
+	menu_prompt+="[${y}CTRL+X: ${n}end] "
+	menu_prompt+="[${y}CTRL+C: ${n}quit]"
+
+	# clear; echo
+
+	local pkgs=(
+		"python"
+		"node"
+		"rust"
+		"lua"
+		"ruby"
+		"perl"
+	)
+
+	zmenu select selection\
+		--width 60 \
+		--selected-color "c" \
+		--selected "4" \
+		--multy \
+		--focus 1 \
+		--color 'g b' \
+		--align "r l l c r l" \
+		--spaces "1 2 ' [' '] ' ' [' 1 '] ' 2" \
+		--no-bottom-line \
+		--title "${b}Install following groups of packages:"\
+		--prompt "$menu_prompt" \
+		$pkgs
+
+	echo "Selection:" $selection
+
+	typeset -gA NEED_PKG
+
+	local pkg
+
+	for  pkg in $pkgs; do
+		NEED_PKG[$pkg]=0
+	done
+
+	for  pkg in $selection; do
+		NEED_PKG[$pkgs[$pkg]]=1
+	done
+
+	NEED_PKG[system]=1
 }
 
 #############################################
 # package installation functions
 #
-count_installed_packages(){
-	# INSTALLED_PACKAGES=$((INSTALLED_PACKAGES + 1))
-	INSTALLED_PACKAGES+=("$1;$2;$3")
-}
+install_pkg(){
+	local type=$1; shift
 
-install_deb_package(){
-	[[ -z $1 ]] && return
+	[[ $NEED_PKG[$type] -eq 0 ]] && return
 
-	if [[ $# -gt 1 ]] then
-		for pkg in $@; do
-			install_deb_package $pkg
-		done
-
-		return
-	fi
-
-	case $1 in
-		node)     install_node; return;;
-		rust)     install_rust; return;;
-	esac
-
-	local package=${1%/*}
-	local pkg_version=${${${(M)1:#*/*}##*/}:-0.0}
-
-	update_system
-
-	local inst_version=$(dpkg -l $package 2>/dev/null | grep '^i' | awk '{print $3}')
-	local repo_version=$(apt show $package 2>/dev/null | grep '^Version:' | sed -e 's/Version: //')
-
-	[[ $inst_version = $repo_version ]] && return 1
-
-	repo_version=$(echo $repo_version | package_version)
-	pkg_version=${(j:.:)${(@s:.:)pkg_version}[1,2]}
-
-	if [[ $repo_version -lt $pkg_version ]]; then
-		FAILED_PACKAGES+=("$package/$repo_version/$pkg_version")
-		return
-	fi
-
-	show_alert "Installing (apt)" "${package}"
-
-	echo
-	sudo apt-get install --yes $package
-
-	count_installed_packages debian install $package
-	return 0
-}
-
-install_node(){
-	# retrieve version of lastest nodejs debian package
-	# on github
-	#
-	local latest=$(
-		curl -fsSL https://deb.nodesource.com/setup_current.x |
-		grep 'NODEREPO="' |
-		sed -e 's/NODEREPO="//' -e 's/"//g' 
-	)
-
-	local repo=$(
-		apt-cache policy |
-		grep -E 'https://deb\.nodesource\.com/node_.+\.x' |
-		sed -E -e 's;.+ https://deb.nodesource.com/;;' -e 's;(node_.+.x) .*;\1;'
-	)
-
-	if [[ $repo != $latest ]]; then
-		show_alert "Registering repo for latest" "nodejs"
-		curl -fsSL https://deb.nodesource.com/setup_current.x | sudo -E bash -
-	fi
-
-	install_deb_package nodejs
-
-	export npm_config_prefix=$__NODE_HOME
-
-	local repo_version=$(npm view ${package} version 2>/dev/null)
-	local local_version=$(npm list -g --depth 0 2>/dev/null | grep " ${package}@" | sed -e "s/.* ${package}@//" 2>/dev/null)
-
-	[[ -z $local_version ]] && local_version=$(npm -v 2>/dev/null)
-
-	[[ $local_version != $repo_version ]] &&  install_node_pkg npm
-}
-
-install_rust(){
-	export CARGO_HOME=$__CARGO_HOME
-	install_deb_package cargo
-}
-
-setup_python_venv(){
-	local venv_path=$__PYTHON_HOME
-	local venv_cfg=$__PYTHON_HOME/pyvenv.cfg
-	local venv_lib=$__PYTHON_HOME/lib/python3
-
-	[[ -d $venv_path   ]] || python3 -m venv --system-site-packages $venv_path
-
-	local version=$(
-		grep -E '^version\s*=\s*' $venv_cfg |
-		sed -E -e 's/^version\s*=\s*//' |
-		awk -F. '{print $1 "." $2}'
-	)
-
-	[[ -L $venv_lib ]] || ln -s python${version} $venv_lib
-	[[ -z $VIRTUAL_ENV ]] && source $venv_path/bin/activate
-}
-
-install_python_pkg(){
-	local packages=("$@")
-
-	[[ -z $1 ]] && return
-
-	setup_python_venv
-
-	for package in $packages; do
-		local has_pkg=$(pip3 list | grep "^$package ")
-
-		if [[ -z $has_pkg ]]; then
-			show_alert "Installing (python)" "$package"
-
-			pip3 install $package
-			echo
-
-			count_installed_packages python install $package
-		else
-			local needs_update=$(pip3 list --outdated | grep "^$package ")
-
-			if [[ -n  $needs_update ]]; then
-				show_alert "Upgrading (python)" "$package"
-
-				pip3 install --upgrade $package
-				echo
-
-				count_installed_packages python upgrade $package
-
-			fi
-		fi
+	for pkg in $@; do
+		install_${type}_pkg $pkg
 	done
 }
 
-install_lua_pkg(){
-	local packages=("$@")
+install_system_pkg (){
+	local todo
 	local package=$1
 
-	[[ -z $1 ]] && return
+	update_system
+	sys_package action todo $package
 
-	if [[ $# -ne 1 ]]; then
-		for package in $packages; do
-			install_lua_pkg $package
-		done
-
-		return
+	if [[ $todo = keep ]] then
+		count_success $OS kept $package
+		return 0
+	elif [[ $todo = missing ]] then
+		count_fails $package missing
+		return 1
+	elif [[ ${todo%%:*} = old ]] then
+		local parts=${(s.:.)todo}
+		count_fails $package "$parts[2]" "$parts[3]"
+		return 1
 	fi
+
+	package=${todo#*:}
+
+	show_alert "Installing [$OS]" "${package}"
+
+	echo
+	sys_package install $package
+
+	if [[ $? -eq 0 ]]; then
+		count_success $OS installed $package
+		return 0
+	else
+		count_fails $OS "failed to install" $package
+		return 1
+	fi
+}
+
+install_python_pkg(){
+	local package=$1
+
+	install_python
+
+	[[ $PYTHON_BIN -eq 0 ]] && count_fails $package "python3 not installed"
+
+	show_alert "Checking [python]" "$package"
+
+	local has_pkg=$(pip3 list 2>/dev/null | grep "^$package ")
+
+	if [[ -z $has_pkg ]]; then
+		clear_screen 4
+
+		show_alert "Installing [python]" "$package"
+
+		pip3 install $package
+		echo
+
+		count_success python install $package
+
+	else
+		local needs_update=$(pip3 list --outdated 2>/dev/null | grep "^$package ")
+
+		clear_screen 4
+
+		if [[ -n  $needs_update ]]; then
+			show_alert "Upgrading [python]" "$package"
+
+			pip3 install --upgrade $package
+			echo
+
+			count_success python upgrade $package
+
+		fi
+	fi
+}
+
+install_lua_pkg(){
+	local package=$1
+
+	install_luarocks
+
+	show_alert "Checking [lua]" "$package"
 
 	local local_version=$(
 		luarocks --tree $__LUA_HOME list $package |
@@ -431,14 +255,16 @@ install_lua_pkg(){
 		tail -1
 	)
 
+	# clear_screen 4
+
 	[[ $local_version = $repo_version ]] && return
 
 	if [[ -z $local_version ]]; then
-		show_alert "Installing (luarocks)" "$package"
-		count_installed_packages lua install $package
+		show_alert "Installing [luarocks]" "$package"
+		count_success lua install $package
 	else
-		show_alert "Upgrading (luarocks)" "$package"
-		count_installed_packages lua upgrade $package
+		show_alert "Upgrading [luarocks]" "$package"
+		count_success lua upgrade $package
 	fi
 
 	echo
@@ -455,43 +281,40 @@ install_lua_pkg(){
 }
 
 install_perl_pkg(){
-	local packages=("$@")
 	local package=$1
 
-	[[ -z $1 ]] && return
+	install_perl
 
-	if [[ $# -ne 1 ]]; then
-		for package in $packages; do
-			install_perl_pkg $package
-		done
-
-		return
-	fi
+	show_alert "Checking [perl]" "$package"
 
 	local has_perl5=$([[ -d ~/perl5 ]] && echo "YES")
 	local has_pkg=$(perl -I $__PERL_LIB -e "use $package" 2>&1)
 
 	if [[ -n $has_pkg ]]; then
-		show_alert "Installing (perl)" "$package"
+		clear_screen 4
+
+		show_alert "Installing [perl]" "$package"
 
 		echo
 		cpanm --local-lib=$__PERL_HOME -n $package
 		echo
 
-		count_installed_packages perl install $package
+		count_success perl install $package
 	else
 		local tar_pkg=${package//::/-}
 		local local_version=$(perl -I $__PERL_LIB -M${package} -e 'print $'${package}'::VERSION . "\n";')
 		local repo_version=$(cpanm --info $package | grep "/${tar_pkg}.*tar.gz" | sed -e "s:.*/${tar_pkg}-::" -e 's:\.tar\.gz$::')
 
+		clear_screen 4
+
 		if [[ $local_version != $repo_version ]]; then
-			show_alert "Upgrading (perl)" "$package"
+			show_alert "Upgrading [perl]" "$package"
 
 			echo
 			cpanm --local-lib=$__PERL_HOME -n $package
 			echo
 
-			count_installed_packages perl upgrade $package
+			count_success perl upgrade $package
 		fi
 	fi
 
@@ -502,72 +325,78 @@ install_perl_pkg(){
 }
 
 install_ruby_pkg(){
-	local packages=("$@")
+	local package=$1
 
-	[[ -z $1 ]] && return
+	install_ruby
 
-	for package in $packages; do
-		local has_pkg=$(gem info $package | grep "^$package ")
+	show_alert "Checking [ruby]" "$package"
 
-		if [[ -z $has_pkg ]]; then
-			show_alert "Installing (ruby)" "$package"
+	local has_pkg=$(gem info $package | grep "^$package ")
+
+	[[ -d $__RUBY_BIN ]] || mkdir -p $__RUBY_BIN
+
+	if [[ -z $has_pkg ]]; then
+		clear_screen 4
+
+		show_alert "Installing [ruby]" "$package"
+
+		echo
+		gem install --user-install -n $__RUBY_BIN $package
+		echo
+
+		count_success ruby install $package
+	else
+		local local_version=$(echo $has_pkg | sed -e "s/^${package} (//" -e 's/)//')
+		local repo_version=$(gem info $package --remote | grep "^$package " | sed -e "s/^${package} (//" -e 's/)//')
+
+		clear_screen 4
+
+		if [[ $local_version != $repo_version ]]; then
+			show_alert "Upgrading [ruby]" "$package"
 
 			echo
-			sudo gem install $package
+			gem install --user-install -n $__RUBY_BIN $package
+			# sudo gem install $package
 			echo
 
-			count_installed_packages ruby install $package
-		else
-			local local_version=$(echo $has_pkg | sed -e "s/^${package} (//" -e 's/)//')
-			local repo_version=$(gem info $package --remote | grep "^$package " | sed -e "s/^${package} (//" -e 's/)//')
-
-			if [[ $local_version != $repo_version ]]; then
-				show_alert "Upgrading (ruby)" "$package"
-
-				echo
-				sudo gem install $package
-				echo
-
-				count_installed_packages ruby update $package
-			fi
+			count_success ruby update $package
 		fi
-	done
+	fi
 }
 
 
 install_node_pkg(){
-	local packages=("$@")
 	local package=$1
 
-	[[ -z $1 ]] && return
+	install_node
 
-	if [[ $# -ne 1 ]]; then
-		for package in $packages; do
-			install_node_pkg $package
-		done
-	fi
+	show_alert "Checking [npm]" "$package"
 
 	export npm_config_prefix=$__NODE_HOME
 
 	local local_version=$(npm list -g --depth 0 2>/dev/null | grep " ${package}@" | sed -e "s/.* ${package}@//")
 
 	if [[ -z $local_version ]]; then
-		show_alert "Installing (npm)" "$package"
+		clear_screen 4
+
+		show_alert "Installing [npm]" "$package"
 
 		npm install -g $package
 		echo
 
-		count_installed_packages node install $package
+		count_success node install $package
 	else
 		local repo_version=$(npm view ${package} version)
 
+		clear_screen 4
+
 		if [[ $local_version != $repo_version ]]; then
-			show_alert "Upgrading (npm)" "$package"
+			show_alert "Upgrading [npm]" "$package"
 
 			npm install -g $package
 			echo
 
-			count_installed_packages node upgrade $package
+			count_success node upgrade $package
 		fi
 	fi
 
@@ -575,43 +404,114 @@ install_node_pkg(){
 }
 
 install_rust_pkg(){
-	local packages=("$@")
+	local package=$1
 
-	[[ -z $1 ]] && return
+	install_rust
 
-	for package in $packages; do
-		local has_pkg=$(cargo install --list | grep "^${package##*::} ")
+	show_alert "Checking [rust]" "$package"
 
-		if [[ -z $has_pkg ]]; then
-			show_alert "Installing (cargo)" "${package##*::}"
+	local has_pkg=$(cargo install --list | grep "^${package##*::} ")
+
+	if [[ -z $has_pkg ]]; then
+		clear_screen 4
+
+		show_alert "Installing [cargo]" "${package##*::}"
+
+		echo
+		cargo install ${package##*::}
+		echo
+
+		count_success rust install $package
+	else
+		local local_version=$(echo $has_pkg | awk '{print $NF}' | sed -e 's/:$//' -e 's/^v//')
+		local repo_version=$(cargo search -q ${package##*::} | grep "^${package##*::} " | sed -e 's/^.*= "//' -e 's/".*//')
+
+		clear_screen 4
+
+		if [[ $local_version != $repo_version ]]; then
+			show_alert "Upgrading [cargo]" "${package##*::}"
 
 			echo
 			cargo install ${package##*::}
 			echo
 
-			count_installed_packages rust install $package
-		else
-			local local_version=$(echo $has_pkg | awk '{print $NF}' | sed -e 's/:$//' -e 's/^v//')
-			local repo_version=$(cargo search -q ${package##*::} | grep "^${package##*::} " | sed -e 's/^.*= "//' -e 's/".*//')
-
-			if [[ $local_version != $repo_version ]]; then
-				show_alert "Upgrading (cargo)" "${package##*::}"
-
-				echo
-				cargo install ${package##*::}
-				echo
-
-				count_installed_packages rust upgrade $package
-			fi
-	 fi
-	done
+			count_success rust upgrade $package
+		fi
+ fi
 
 	# warning: be sure to add `/home/koske/.local/share/nvim/cargo/bin` to your PATH to be able to run the installed binaries
+}
+
+install_neovim_package(){
+	local app
+	local pkg=$1
+
+	case $pkg in 
+		app) app=nvim.appimage
+			 ;;
+		deb) app=nvim
+			 ;;
+	esac
+
+	if [[ -z $app ]]; then
+
+		cat <<-EOF | alert_box --left
+			${y}
+			  Give package type you want to install:
+			
+			    ${w}app${y}   - install appImage
+			    ${w}deb${y}   - install debian package
+			${n}
+		EOF
+
+		exit 1
+	fi
+
+	local is_installed=$(hash $app 2>/dev/null; echo $?)
+
+	case $pkg in
+		app) download_appimage
+			 register_neovim_app nvim.appimage vi  N
+			 register_neovim_app nvim.appimage vim Y
+			 ;;
+		deb) download_deb_pkg
+			 register_neovim_app nvim vi  N
+			 register_neovim_app nvim vim Y
+			 ;;
+	esac
+
+	echo
+}
+
+install_node(){
+	install_node_package
+
+	install_node_pkg npm
+
+	# export npm_config_prefix=$__NODE_HOME
+	#
+	# local repo_version=$(npm view ${package} version 2>/dev/null)
+	# local local_version=$(npm list -g --depth 0 2>/dev/null | grep " ${package}@" | sed -e "s/.* ${package}@//" 2>/dev/null)
+	#
+	# [[ -z $local_version ]] && local_version=$(npm -v 2>/dev/null)
+	#
+	# [[ $local_version != $repo_version ]] &&  install_node_pkg npm
+}
+
+install_rust(){
+	export CARGO_HOME=$__CARGO_HOME
+	install_system_package $1
 }
 
 #############################################
 # worker functions
 #
+clear_screen(){
+	for i in {1..$1}; do
+		echo -n '[A[2K'
+	done
+}
+
 show_alert(){
 	local action=$1
 	local object=$2
@@ -635,8 +535,10 @@ show_alert(){
 }
 
 download_appimage(){
-	local url="$NEOVIM_DOWNLOAD_URL/nvim.appimage"
-	local dest=/usr/local/bin
+	local app=nvim.appimage
+	local url="$NEOVIM_DOWNLOAD_URL/$app"
+	# local dest=/usr/local/bin
+	local dest=/opt/nvim
 	local mode='oug+rx'
 
 	install_deb_package libfuse2
@@ -644,8 +546,8 @@ download_appimage(){
 
 	local prog=$dest/nvim.appimage
 
-	[[ ! -d $dest ]] && mkdir $dest && chmod 755 $dest
-	[[ -f $dest/$app ]] && sudo rm $dest/$app
+	[[ -d $dest ]] || sudo mkdir $dest && sudo chmod 755 $dest
+	[[ -f $prog ]] && sudo rm $prog
 
 	show_alert "Downloading" "neovim appImage"
 	sudo curl -fL -o $prog $url
@@ -653,13 +555,14 @@ download_appimage(){
 
 	show_alert "Installing" "neovim appImage"
 	sudo chmod $mode $prog
+	sudo ln -s $prog /usr/local/bin/nvim 
 }
 
 download_deb_pkg(){
 	local url="$NEOVIM_DOWNLOAD_URL/nvim-linux64.deb"
 	local dest=/tmp
 
-	install_deb_package curl
+	install_system_package curl
 
 	local pkg=$dest/nvim-linux64.deb
 
@@ -682,7 +585,7 @@ download_deb_pkg(){
 	echo
 	sudo apt install $pkg
 
-	count_installed_packages debian install neovim
+	count_success debian install neovim
 }
 
 register_neovim_app(){
@@ -726,97 +629,23 @@ register_neovim_app(){
 }
 
 
-update_system(){
-	[[ $UPGRADED -eq 1 ]] && return
-
-	echo
-	sudo -v
-
-	show_alert "Updating" "system package list"
-
-	sudo apt-get -q update >/dev/null
-
-	local test_run=$(apt-get -s upgrade)
-
-	local upgradable=($(
-		echo $test_run |
-		awk '
-			/^[^ \t]+/ {flag = 0}
-			flag {print}
-			/The following packages will be upgraded:/ {flag = 1}
-		'
-	))
-
-	local keptback=($(
-		echo $test_run |
-		awk '
-			/^[^ \t]+/ {flag = 0}
-			flag {print}
-			/The following packages have been kept back:/ {flag = 1}
-		'
-	))
-
-	AUTO_REMOVE_PKGS=($(
-		echo $test_run |
-		awk '
-			/^[^ \t]+/ {flag = 0}
-			flag {print}
-			/automatically installed and .* longer required:/ {flag = 1}
-		'
-	))
-
-
-	CLEARED=0
-
-	if [[ -n $upgradable ]]; then
-		[[ $CLEARED -eq 0 ]] && clear
-	       	CLEARED=1
-
-		echo
-		show_alert "ALERT" "Your system needs upgrade !!!"
-		echo 
-
-		if yesno_question "Do you want to upgrades the system [y/N]:" N; then
-			sudo apt-get upgrade -qq --yes
-			echo
-		else
-			exit
-		fi
-
-	fi
-
-	if [[ -n $keptback ]]; then
-		[[ $CLEARED -eq 0 ]] && clear
-	       	CLEARED=1
-
-		{
-			echo "Following packages are kept back:"
-			echo
-			echo ${(j:\n:)${(@)keptback/#/   ${n}}}${y}
-			echo
-			echo "They have to be installed manualy!"
-		} | sed -e 's/^/   /' | alert_box --expand --left
-
-		if yesno_question "Do you want to install kept back packages [y/N]:" N; then
-			sudo apt-get install -qq --yes $keptback
-			echo
-		else
-			exit
-		fi
-	fi
-
-	UPGRADED=1
-}
-
 yesno_question(){
 	local prompt=$1
 	local default=${(L)2}
 
 	local yesno
 
-	echo -n "${prompt} "
-	read yesno
 	echo
+	while true; do
+		echo -n '[1A[2K'
+		echo -n "${prompt} "
+		read yesno
+
+		if [[ -z $yesno ]] || [[ ${(L)yesno} = y ]] || [[ ${(L)yesno} = n ]] then
+			echo 
+			break
+		fi
+	done
 
 	[[ $default = n ]] && [[ ${(L)yesno} != y ]] && return 1
 	[[ $default = y ]] && [[ ${(L)yesno} != n ]] && return 0
@@ -834,15 +663,13 @@ show_notifications(){
 	local void
 	local txt
 
-	[[ $PACKAGE_INSTALATION -eq 0 ]] && return
-
 	if [[ -z $INSTALLED_PACKAGES ]] && [[ -z $FAILED_PACKAGES ]]; then
 		alert_box --expand "No packagages were installed !!!"
 	fi
 
 	if [[ -n $INSTALLED_PACKAGES ]]; then
 		{
-			echo "Following packages were installed:"
+			echo "Following packages were installed/upgraded/kept:"
 			echo
 			printf "${n}%-10s %-10s %-25s\n" "Type" "Action" "Package"
 			echo ${(l:48::-:)txt}
@@ -879,11 +706,11 @@ show_notifications(){
 		echo -n "$n"
 
 		for pkg in $FAILED_PACKAGES; do
-			local parts=("${(s:/:)pkg}")
+			local parts=("${(s:;:)pkg}")
 
 			echo -n "${y}${(r:35:)parts[1]}${n}"
 			echo -n "${r}${(r:10:)parts[2]}${n}"
-			echo -n "${b}(${parts[3]})${n}"
+			[[ -n $parts[3] ]] && echo -n "${b}(${parts[3]})${n}"
 			echo
 		done
 
@@ -1011,7 +838,10 @@ parse_arguments(){
 }
 
 init_colors
+
 check_if_root
+check_linux_flavour
+
 parse_arguments $@
 
 $SCRIPT_COMMAND "${SCRIPT_ARGS[@]}"

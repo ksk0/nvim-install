@@ -1,0 +1,161 @@
+#!/usr/bin/zsh
+
+OS_NAME=SUSE-X
+
+typeset -gA PROVIDES_PATTERN=(
+	luarocks '^[^ ]*-luarocks$'
+	gcc      '^gcc[0-9]*$'
+	python3  '^python3[0-9]*$'
+	nodejs   '^nodejs[0-9]*$'
+)
+
+sys_package_version(){
+	local vtype=$1
+	local pkg=$2
+
+	if [[ $vtype = installed ]] then
+		rpm -qi $pkg |
+		awk  '
+			/^Version / {ver=$3}
+			/^Release / {rel=$3}
+
+			END {if (ver != "") print ver "-" rel}
+		'
+
+	elif [[ $vtype = repo ]] then
+		zypper info $pkg | awk  '/^Version / {print $3}'
+
+	fi
+}
+
+sys_package_provides(){
+	local __storage=$1
+	local __package=$2
+	local __pattern=$PROVIDES_PATTERN[$2]
+
+	local __packages=("${(@f)$(
+		zypper -s 11 search $__package |
+			awk '
+				name && pkgs {print; next}
+				$2 == "Name" {name = 1;next}
+				name && /^ *$/ {pkgs = 1;next}
+			' |
+			sed -E -e 's/[^ ]{0,4}/ /'  | 
+			awk '{print $1}' |
+			grep -E -e $__pattern |
+			uniq |
+
+		while read pkg; do
+			local pkg_version=$(sys_package version repo $pkg)
+			local nrm_version=$(normalize_version $pkg_version)
+
+			echo "$pkg;$pkg_version;$nrm_version"
+		done
+	)}")
+
+	__packages="${(@qq)__packages}"
+
+	eval "$__storage=($__packages)"
+}
+
+install_python(){
+	local action
+	sys_package action action python3/3.9
+
+	exit
+
+	setup_python python3 python3-pip python3-virtualenv
+}
+
+install_luarocks(){
+	[[ ${+LUA_BIN} -eq 1 ]] && return
+
+	show_alert "Checking [$OS]" "luarocks"
+
+	sys_package provides luarocks
+	echo
+	sys_package provides gcc
+
+	exit
+
+	local package
+	local luarocks_pkgs=("${(@f)$(
+		zypper -q -s 11 se luarocks |
+		tail -n +4 |
+		sed -e 's/....//' |
+		awk '{print $1}'
+	)}")
+
+	select_package package $luarocks_pkgs
+
+
+	LUA_BIN=1
+	# install_pkg system $package/3.0 || LUA_BIN=0
+	install_pkg system $package || LUA_BIN=0
+
+	[[ $LUA_BIN -eq 0 ]] && return
+
+	install_pkg system \
+		gcc \
+		make \
+		cmake
+}
+
+
+node_package(){
+	if [[ $1 = latest ]] then
+		zypper -s 11 se nodejs |
+		tail -n+6 |
+		awk '/nodejs[0-9]+ /{print $1}' | 
+		sed -e 's/nodejs//' |
+		sort -n |
+		uniq |
+		tail -1
+
+		return
+	fi
+
+	if [[ $1 = installed ]] then
+		rpm -qa |
+		grep -E '^nodejs[0-9]+'  |
+		sed -e  's/-.*//' -e 's/nodejs//'|
+		sort -n
+	fi
+}
+
+install_node_package(){
+	# zypper -s 11 se nodejs
+	# echo "==================================================================================="
+
+	show_alert "Checking [$OS]" nodejs
+
+	local latest_version=$(node_package latest)
+
+
+	local inst_version=("${(@f)$(node_package installed)}")
+	local inst_last_version=$inst_version[-1]
+
+	echo Latest version: ${latest_version}
+	echo Latest installed: ${inst_last_version}
+
+
+	exit
+
+	# clear_screen 4
+
+	# install_system_package nodejs${latest_version}
+	# install_system_package npm${latest_version}
+}
+
+install_neovim(){
+	download_appimage
+	
+	# install_neovim_package app
+}
+
+update_system(){
+	[[ $UPGRADED -eq 1 ]] && return
+
+  echo "Updating system $OS_NAME"
+  UPGRADED=1
+}
