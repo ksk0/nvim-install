@@ -1,25 +1,21 @@
 # list of packages to be installed
 #
-[common]
-	unzip tar gzip wget curl git cmake xclip
-
 [arch]
-	unzip tar gzip wget curl git
-
 [debian]
-	unzip tar gzip wget curl git
+[common]
+	unzip tar gzip wget curl git perl python
 
 [python]
 	pynvim
-
-[lua]
-	toml
 
 [node]
 	neovim tree-sitter-cli
   
 [rust]
 	fd::fd-find rg::ripgrep
+
+[lua]
+	toml
 
 [ruby]
 	neovim
