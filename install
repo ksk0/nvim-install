@@ -236,7 +236,7 @@ install_lua_pkg(){
 	alert_msg "Checking [lua]" "$package"
 
 	local local_version=$(
-		luarocks --tree $__LUA_HOME list $package |
+		luarocks --lua-version 5.1 --tree $__LUA_HOME list $package |
 		awk -v pkg="${(L)package}" '
 			/^$/{found = 0}
 			found && /\(installed\)/{print $1}
