@@ -48,12 +48,14 @@ check_linux_flavour(){
 		OS=arch
 	elif [[ -f /etc/redhat-release ]] then
 		OS=redhat
+		OS=""
 	elif [[ -f /etc/debian_version ]] then
 		OS=debian
 	elif [[ -f /etc/os-release ]] then
 		OS=$(source /etc/os-release; echo ${ID_LIKE% *})
 
 		[[ $OS = suse ]] || OS=""
+		OS=""
 	fi
 
 	[[ -n $OS ]] && source $SCRIPT_DIR/src/$OS && return
