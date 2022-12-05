@@ -24,6 +24,9 @@ __RUBY_BIN=$__RUBY_HOME/bin
 
 __NODE_MIN_VERSION=16.0
 
+typeset -A __INSTALLED_PKGS
+typeset -A __FAILED_PKGS
+
 export CARGO_HOME=$__CARGO_HOME
 
 check_if_root(){
@@ -67,21 +70,41 @@ count_action(){
 	local action=$1; shift
 
 	if [[ $action = success ]]; then
-		INSTALLED_PACKAGES+=("$1;$2;$3")
+		count_success $1 $2 $3
 		return 0
 
 	elif [[ $action = fail ]]; then
-		FAILED_PACKAGES+=("$1;$2;$3")
+		count_fails $1 $2 $3
 		return 1
 
 	elif [[ $action -eq 0 ]]; then
-		INSTALLED_PACKAGES+=("$1;$2;${3}ed")
+		count_success $1 $2 "${3}ed"
 		return 0
 
 	else
-		FAILED_PACKAGES+=("$1;$2;failed to $3")
+		count_fails $1 $2 "failed to ${3}"
 		return 1
 	fi
+}
+
+count_success(){
+	local pkg="$1:$2"
+
+	[[ ${+__INSTALLED_PKGS[$pkg]} -eq 1 ]] && return
+
+	INSTALLED_PACKAGES+=("$1;$2;$3")
+
+	__INSTALLED_PKGS[$pkg]=1
+}
+
+count_fails(){
+	local pkg="$1:$2"
+
+	[[ ${+__FAILED_PKGS[$pkg]} -eq 1 ]] && return
+
+	FAILED_PACKAGES+=("$1;$2;$3")
+
+	__FAILED_PKGS[$pkg]=1
 }
 
 load_package_list(){
