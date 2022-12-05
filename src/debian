@@ -111,7 +111,7 @@ install_node(){
 					 ${n}nodejs.org:   ${g}$remote_version
 
 
-			${y}Installed version SHOULD NOT be less than ${g}$_NODE_MIN_VERSION
+			${y}Installed version SHOULD NOT be less than ${g}$__NODE_MIN_VERSION
 		  ${n}
 			EOF
 
@@ -131,7 +131,7 @@ install_node(){
 				 ${n}nodejs.org:   ${g}$remote_version
 
 
-			${y}Installed version SHOULD NOT be less than ${g}$_NODE_MIN_VERSION
+			${y}Installed version SHOULD NOT be less than ${g}$__NODE_MIN_VERSION
 			${n}
 		EOF
 
