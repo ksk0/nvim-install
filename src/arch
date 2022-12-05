@@ -1,7 +1,5 @@
 #!/usr/bin/zsh
 
-OS_NAME=ARCH-X
-
 sys_package_version(){
 	local vtype=$1
 	local pkg=$2
@@ -18,54 +16,95 @@ sys_package_version(){
 
 
 install_python(){
-	setup_python python python-pip python-virtualenv
+	setup_python python python-pip python-virtualenv # cmake
 }
 
 install_luarocks(){
-	[[ ${+LUA_BIN} -eq 1 ]] && return
-
-	LUA_BIN=1
-	install_pkg system gcc cmake make luarocks/3.0 || LUA_BIN=0
-}
-
-install_node(){
-	[[ ${+NODE_BIN} -eq 1 ]] && return
-
-	NODE_BIN=1
-	install_pkg system nodejs npm || NODE_BIN=0
-
-	[[ $NODE_BIN -eq 1 ]] && install_pkg node npm
-}
-
-install_perl(){
-	[[ ${+PERL_BIN} -eq 1 ]] && return
-
-	PERL_BIN=1
-	install_pkg system perl || PERL_BIN=0
+	setup_luarocks gcc make cmake lua51
 }
 
 install_ruby(){
-	[[ ${+RUBY_BIN} -eq 1 ]] && return
+	setup_ruby make gcc
+}
 
-	RUBY_BIN=1
-	install_pkg system ruby ruby-dev  || RUBY_BIN=0
+install_perl (){
+	setup_perl make gcc
+}
 
+install_node(){
+	setup_node
 }
 
 install_rust(){
-	[[ ${+RUST_BIN} -eq 1 ]] && return
-
-	RUST_BIN=1
-	install_pkg system rust || RUST_BIN=0
+	setup_rust rust make
 }
 
 install_neovim(){
-	install_system_package neovim
+	install_pkg system neovim
+
+ 	# register_neovim_app nvim vi  N
+ 	# register_neovim_app nvim vim Y
 }
 
 update_system(){
-	[[ $UPGRADED -eq 1 ]] && return
+	[[ $UPGRADED -eq 1 ]] && return || UPGRADED=1
 
-  echo "Updating system $OS_NAME"
-  UPGRADED=1
+	cat <<-EOF | alert_box --expand
+		${n}Before installing/updating any system packages system should
+		${n}be upgraded. On Arch system you should do this manually, but
+		${n}we can check if  any upgrade is needed.
+
+		If you choose to do the check, package database will be synced.
+	EOF
+
+	yesno_question "${y}Do you want to sync the package database [Y/n]:${n}" Y
+
+	[[ $? -eq 0 ]] && update_system_database
+
+	local upgradable=($(pacman -Qu | awk '{print $1}'))
+
+	if [[ -z $upgradable ]]; then
+		alert_box --expand "No package(s) needs upgrade !!!"
+
+		return
+	fi
+
+	{
+		echo "There are package(s) that needs upgrade:"
+		echo "-----------------------------------------"
+
+		for package in $upgradable; do
+			echo "${n}$package"
+			# local parts=("${(s:;:)package}")
+			# printf "${n}%-10s %-10s %-25s\n" $parts[1] $parts[2] $parts[3]
+		done
+
+	} | sed -e 's/^/   /' | alert_box --left --expand
+
+	echo
+	cat <<-EOF | alert_box --expand
+		Upgrade system manualy, and run install script again!
+
+		use: ${n}sudo pacman -Su
+	EOF
+	echo
+
+	exit
+}
+
+update_system_database(){
+	local width=$(tput cols)
+
+	alert_msg "Updating" "system package database"
+	echo
+
+	if [[ $width -gt 80 ]] then
+		stty cols 80
+	fi
+
+	sudo pacman -Sy
+
+	if [[ $width -gt 80 ]] then
+		stty cols $width
+	fi
 }
