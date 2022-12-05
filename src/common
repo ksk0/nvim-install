@@ -1,5 +1,6 @@
 #!/usr/bin/zsh
 
+local -A NEED_PKG=(system 1)
 
 BIN_DIR=/usr/local/bin
 UPGRADED=0
@@ -62,12 +63,25 @@ check_linux_flavour(){
 	exit 1
 }
 
-count_success(){
-	INSTALLED_PACKAGES+=("$1;$2;$3")
-}
+count_action(){
+	local action=$1; shift
 
-count_fails(){
-	FAILED_PACKAGES+=("$1;$2;$3")
+	if [[ $action = success ]]; then
+		INSTALLED_PACKAGES+=("$1;$2;$3")
+		return 0
+
+	elif [[ $action = fail ]]; then
+		FAILED_PACKAGES+=("$1;$2;$3")
+		return 1
+
+	elif [[ $action -eq 0 ]]; then
+		INSTALLED_PACKAGES+=("$1;$2;${3}ed")
+		return 0
+
+	else
+		FAILED_PACKAGES+=("$1;$2;failed to $3")
+		return 1
+	fi
 }
 
 load_package_list(){
@@ -205,7 +219,7 @@ sys_package_action_single(){
 	local package=${1%/*}
 	local version=${${${(M)1:#*/*}##*/}:-0.0}
 
-	show_alert "Checking [$OS]" "${package}"
+	alert_msg "Checking [$OS]" "${package}"
 	echo
 
 	local inst_version=$(sys_package version installed $package)
@@ -224,13 +238,15 @@ sys_package_action_single(){
 		action=missing
 	elif [[ $inst_version = $repo_version ]]; then
 		action=keep
-	elif is_newer $have_version $need_version; then
+	elif ! is_newer $have_version $need_version; then
 		action=old:$have_version:$need_version
 	else
 		action=install:$package
 	fi
 
 	eval "$store=$action"
+
+	clear_screen 9
 }
 
 sys_package_action_multy(){
@@ -247,7 +263,7 @@ sys_package_action_multy(){
 	local -A invalid_installed
 	local pkg pkg_name pkg_version nrm_version
 
-	show_alert "Checking [$OS]" "$package"
+	alert_msg "Checking [$OS]" "$package"
 
 	sys_package provides repo_packages $package
 
@@ -420,6 +436,60 @@ normalize_version(){
 	'
 }
 
+setup_perl(){
+	[[ ${+PERL_BIN} -eq 1 ]] && return
+
+	PERL_BIN=1
+	install_pkg system perl cpanminus || PERL_BIN=0
+
+	[[ $PERL_BIN -eq 0 ]] && return
+
+	local system_pkg=(${@:#*::*})
+	local perl_pkg=(${(M)@:#*::*})
+
+	install_pkg system $system_pkg || PERL_BIN=0
+	install_pkg perl App::cpanminus $perl_pkg
+}
+
+setup_luarocks(){
+	[[ ${+LUA_BIN} -eq 1 ]] && return
+
+	LUA_BIN=1
+	install_pkg system luarocks/3.0 || LUA_BIN=0
+
+	[[ $LUA_BIN -eq 0 ]] && return
+
+	install_pkg system $@
+}
+
+setup_ruby(){
+	[[ ${+RUBY_BIN} -eq 1 ]] && return
+
+	RUBY_BIN=1
+	install_pkg system ruby   || RUBY_BIN=0
+
+	[[ $RUBY_BIN -eq 0 ]] && return
+
+	install_pkg system $@ || RUBY_BIN=0
+}
+setup_rust(){
+	[[ ${+RUST_BIN} -eq 1 ]] && return
+
+	RUST_BIN=1
+	install_pkg system $@ || RUST_BIN=0
+}
+
+setup_node(){
+	[[ ${+NODE_BIN} -eq 1 ]] && return
+
+	NODE_BIN=1
+	install_pkg system nodejs npm || NODE_BIN=0
+
+	[[ $NODE_BIN -eq 0 ]] && return
+
+	install_pkg node npm
+}
+
 setup_python(){
 	[[ ${+PYTHON_BIN} -eq 1 ]] && return
 
@@ -449,4 +519,59 @@ setup_python_venv(){
 
 	[[ -L $venv_lib ]] || ln -s python${version} $venv_lib
 	[[ -z $VIRTUAL_ENV ]] && source $venv_path/bin/activate
+}
+
+download_appimage(){
+	local app=nvim.appimage
+	local url="$NEOVIM_DOWNLOAD_URL/$app"
+	# local dest=/usr/local/bin
+	local dest=/opt/nvim
+	local mode='oug+rx'
+
+	install_deb_package libfuse2
+	install_deb_package curl
+
+	local prog=$dest/nvim.appimage
+
+	[[ -d $dest ]] || sudo mkdir $dest && sudo chmod 755 $dest
+	[[ -f $prog ]] && sudo rm $prog
+
+	alert_msg "Downloading" "neovim appImage"
+	sudo curl -fL -o $prog $url
+	echo
+
+	alert_msg "Installing" "neovim appImage"
+	sudo chmod $mode $prog
+	sudo ln -s $prog /usr/local/bin/nvim 
+}
+
+download_deb_pkg(){
+	local url="$NEOVIM_DOWNLOAD_URL/nvim-linux64.deb"
+	local dest=/tmp
+
+	install_pkg system curl
+
+	local pkg=$dest/nvim-linux64.deb
+
+	alert_msg "Downloading" "neovim deb package"
+	echo
+	sudo curl -fL -o $pkg $url
+	echo
+
+	local inst_version=$(dpkg -l neovim 2>/dev/null | grep '^i' | awk '{print $3}')
+	local repo_version=$(apt show $pkg 2>/dev/null | grep '^Version:' | sed -e 's/Version: //')
+
+	
+	if [[ $inst_version = $repo_version ]]; then
+		alert_box --expand "Newest version of ${r}neovim${y} already installed!"
+		count_action success system neovim kept
+		return
+	fi
+
+	alert_msg "Installing" "neovim deb package"
+
+	echo
+	sudo apt install $pkg
+
+	count_action $? system neovim install
 }

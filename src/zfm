@@ -1267,22 +1267,21 @@ __zmenu_exec_select(){
 			END)    __zmenu_item_last;;
 
 			CTRL_A) __zmenu_item_select_all;;
-			CTRL_N)   __zmenu_item_select_none;;
+			CTRL_N) __zmenu_item_select_none;;
 			CTRL_I) __zmenu_item_select_invert;;
 
 			SPACE)  __zmenu_item_select_toggle 0;;
 			ENTER)  __zmenu_item_select_toggle 1 && break ;;
 
-			CTRL_X) break ;;
-			ESCAPE) break ;;
-			BREAK)  break ;;
+			ACCEPT) break ;;
+			QUIT)   break ;;
 
 		esac
 	done
 
-	[[ $key = ESCAPE ]] || [[ $key = BREAK ]] && zm_selected=()
-
 	__zmenu_move_focus 0
+
+	[[ $key = QUIT ]] && zm_selected=()
 
 	zterm cursor position $zm_pos_zle 1
 	zterm echo restore
@@ -1735,12 +1734,10 @@ __zzle_map(){
 
 	# <ENTER> and <SPACE> are selection keys
 	#
-	#  CTRL+X accept selection
 	#  CTRL+A select ALL
 	#  CTRL+N select NONE
 	#  CTRL+I invert selection
 	#
-	bindkey -M $key_map ""    __zzle_key_CTRL_X                   # CTRL+X
 	bindkey -M $key_map ""    __zzle_key_CTRL_A                   # CTRL+A
 	bindkey -M $key_map ""    __zzle_key_CTRL_N                   # CTRL+U
 	bindkey -M $key_map "^I"    __zzle_key_CTRL_I                   # CTRL+I
@@ -1748,9 +1745,13 @@ __zzle_map(){
 	bindkey -M $key_map ""    __zzle_key_enter                    # <ENTER>
 	bindkey -M $key_map " "     __zzle_key_space                    # <SPACE>
 
-	# activate CTRL+C
+	#  2 x escape      - quit selection
+	#  CTRL+C          - quit selection 
+	#  CTRL+O          - accept selection
 	#
-	bindkey -M $key_map ""    __zzle_key_break                    # CTRL+C
+	bindkey -M $key_map ""    __zzle_key_accept                   # CTRL+O
+	bindkey -M $key_map ""    __zzle_key_quit                     # CTRL+C
+	bindkey -M $key_map ""  __zzle_key_quit                     # 2 x escape
 }
 
 __zzle_load_widgets(){
@@ -1768,12 +1769,12 @@ __zzle_load_widgets(){
 	zle -N __zzle_key_space
 	zle -N __zzle_key_enter
 
-	zle -N __zzle_key_CTRL_X
 	zle -N __zzle_key_CTRL_A
 	zle -N __zzle_key_CTRL_N
 	zle -N __zzle_key_CTRL_I
 
-	zle -N __zzle_key_escape
+	zle -N __zzle_key_accept
+	zle -N __zzle_key_quit
 	zle -N __zzle_key_break
 
 	zle -N __zzle_vared_init
@@ -1846,6 +1847,16 @@ __zzle_key_CTRL_I(){
 	zle accept-line
 }
 
+
+__zzle_key_accept(){
+	__zzle_key_code='ACCEPT'
+	zle accept-line
+}
+
+__zzle_key_quit(){
+	__zzle_key_code='QUIT'
+	zle accept-line
+}
 
 __zzle_key_escape(){
 	__zzle_key_code='ESCAPE'

@@ -4,52 +4,16 @@
 	unzip tar gzip wget curl git cmake xclip
 
 [arch]
-	unzip tar gzip wget curl git # cmake xclip
-	# python python-pip python-virtualenv
-  # luarocks/3.0
-	# ruby ruby-dev
-	# perl cpanminus
-  # rust
+	unzip tar gzip wget curl git
 
 [debian]
-	unzip tar gzip wget curl git # cmake xclip
-	# python3 python3-pip python3-venv
-  # luarocks/3.0
-	# ruby ruby-dev node
-	# perl cpanminus
-  # cargo 
-  # rust
-  # node
-
-[redhat]
-	unzip tar gzip wget curl git # cmake xclip
-	# python3 python3-pip python3-virtualenv
-  # luarocks/3.0
-  # fuse fuse-libs
-  # gcc-c++
-	# ruby ruby-devel
-	# perl perl-App-cpanminus
-  # cargo
-
-# [redhat]
-#   zsh
-#   luarocks/3.0
-
-[suse]
-  unzip tar gzip wget curl git # cmake xclip
-  # python3 python3-pip python3-virtualenv
-  #  lua51-luarocks/3.0
-  #  fuse libfuse2
-	# ruby ruby-devel
-	# perl perl-App-cpanminus
-  #  rust
-  # node
+	unzip tar gzip wget curl git
 
 [python]
 	pynvim
 
 [lua]
-	toml # LuaSocket
+	toml
 
 [node]
 	neovim tree-sitter-cli
@@ -61,4 +25,4 @@
 	neovim
 
 [perl]
-	Neovim::Ext App::cpanminus
+	Neovim::Ext

@@ -17,48 +17,32 @@ sys_package_version(){
 }
 
 install_python(){
-	setup_python python3 python3-pip python3-venv
+	setup_python python3 python3-pip python3-venv # cmake
 }
 
 install_luarocks(){
-	[[ ${+LUA_BIN} -eq 1 ]] && return
-
-	LUA_BIN=1
-	install_pkg system $package/3.0 || LUA_BIN=0
-
-	[[ $LUA_BIN -eq 0 ]] && return
-
-	install_pkg system \
-		gcc \
-		make \
-		cmake \
-		build-essential
-}
-
-install_perl(){
-	[[ ${+PERL_BIN} -eq 1 ]] && return
-
-	PERL_BIN=1
-	install_pkg system perl || PERL_BIN=0
+	setup_luarocks gcc make cmake build-essential
 }
 
 install_ruby(){
-	[[ ${+RUBY_BIN} -eq 1 ]] && return
+	setup_ruby ruby-dev make gcc
+}
 
-	RUBY_BIN=1
-	install_pkg system ruby ruby-dev  || RUBY_BIN=0
-
+install_perl (){
+	setup_perl make gcc
 }
 
 install_rust(){
-	[[ ${+RUST_BIN} -eq 1 ]] && return
-
-	RUST_BIN=1
-	install_pkg system cargo || RUST_BIN=0
+	setup_rust cargo make
 }
 
 install_neovim(){
-	install_neovim_package deb
+	download_deb_pkg
+
+ 	register_neovim_app nvim vi  N
+ 	register_neovim_app nvim vim Y
+
+	echo
 }
 
 node_latest(){
@@ -88,7 +72,7 @@ install_node_latest(){
 	local repo=$(node_latest repot)
 
 	if [[ $repo != $latest ]]; then
-		show_alert "Registering repo for latest" "nodejs"
+		alert_msg "Registering repo for latest" "nodejs"
 		curl -fsSL https://deb.nodesource.com/setup_current.x | sudo -E bash -
 	fi
 
@@ -98,8 +82,7 @@ install_node_latest(){
 install_node(){
 	[[ ${+NODE_BIN} -eq 1 ]] && return
 
-	NODE_BIN=1
-	show_alert "Checking [$OS]" nodejs
+	alert_msg "Checking [$OS]" nodejs
 
 	local repo_version=$(sys_package version repo nodejs)
 	local inst_version=$(sys_package version installed nodejs)
@@ -113,7 +96,7 @@ install_node(){
 	local nstatus="installed"
 	local to_install=none
 
-	# clear_screen 4
+	clear_screen 4
 
 	if [[ $repo_version -gt $inst_version ]] then
 		to_install=repo
@@ -160,34 +143,29 @@ install_node(){
 	if [[ $to_install = "remote" ]] then
 		install_node_latest
 	elif [[ $to_install = "repo" ]] then
-		install_pkg system nodejs
-		install_pkg system npm
+		install_pkg system nodejs npm
+	else
+		count_action success system nodejs kept
 	fi
 
-	# echo "Repo:   $repo_version"
-	# echo "Inst:   $inst_version"
-	# echo "Latest: $remote_version"
-	#
-	# echo "Repo:   $repo_version"
-	# echo "Inst:   $inst_version"
-	# echo "Latest: $latest_version"
+	NODE_BIN=1
 
-	# exit 1
+	install_pkg node npm
 }
 
 update_system(){
-	[[ $UPGRADED -eq 1 ]] && return
+	[[ $UPGRADED -eq 1 ]] && return || UPGRADED=1
 
-	UPGRADED=1
+	cat <<-EOF | alert_box --expand
+		${n}Before installing/updating any system packages,
+		${n}ystem should be upgraded.
 
-	return
+		We can update and if necesary upgrade within the script.
+	EOF
 
-	echo
-	sudo -v
+	yesno_question "${y}Do you want to update the package database [Y/n]:${n}" Y
 
-	show_alert "Updating" "system package list"
-
-	sudo apt-get -q update >/dev/null
+	if [[ $? -eq 0 ]] && update_system_database
 
 	local test_run=$(apt-get -s upgrade)
 
@@ -209,7 +187,7 @@ update_system(){
 		'
 	))
 
-	AUTO_REMOVE_PKGS=($(
+	local autoremove=($(
 		echo $test_run |
 		awk '
 			/^[^ \t]+/ {flag = 0}
@@ -218,20 +196,23 @@ update_system(){
 		'
 	))
 
+	local modified=0
 
-	CLEARED=0
-
-	if [[ -n $upgradable ]]; then
-		[[ $CLEARED -eq 0 ]] && clear
-	       	CLEARED=1
-
+	if [[ -z $upgradable ]]; then
 		echo
-		show_alert "ALERT" "Your system needs upgrade !!!"
-		echo 
+		alert_box --expand "No package(s) need upgrade !!!"
 
-		if yesno_question "Do you want to upgrades the system [y/N]:" N; then
+	else
+		alert_box --expand "Your system needs upgrade !!!"
+
+		if yesno_question "${y}Do you want to upgrades the system [y/N]:" N; then
+			alert_msg "${y}Upgrading system packages ..."
+			echo
+
 			sudo apt-get upgrade -qq --yes
 			echo
+
+			modified=1
 		else
 			exit
 		fi
@@ -239,9 +220,6 @@ update_system(){
 	fi
 
 	if [[ -n $keptback ]]; then
-		[[ $CLEARED -eq 0 ]] && clear
-	       	CLEARED=1
-
 		{
 			echo "Following packages are kept back:"
 			echo
@@ -250,13 +228,41 @@ update_system(){
 			echo "They have to be installed manualy!"
 		} | sed -e 's/^/   /' | alert_box --expand --left
 
-		if yesno_question "Do you want to install kept back packages [y/N]:" N; then
+		if yesno_question "${y}Do you want to install kept back packages [y/N]:" N; then
+			alert_msg "${y}Installing kept back packages ..."
+			echo
+
 			sudo apt-get install -qq --yes $keptback
 			echo
+
+			modified=1
 		else
 			exit
 		fi
 	fi
 
-	UPGRADED=1
+	if [[ -n $autoremove ]]; then
+		{
+			echo "Following packages can be removed, since they are not needed:"
+			echo
+			echo ${(j:\n:)${(@)AUTO_REMOVE_PKGS/#/   ${n}}}
+			echo
+			echo "To remove them run:"
+			echo "   ${n}apt autoremove${y}"
+		} | sed -e 's/^/   /' | alert_box --expand --left
+	fi
+
+	if [[ $modified -eq 1 ]]; then
+		alert_box --expand "Run installation script again!"
+
+		echo
+		exit
+	fi
+}
+
+update_system_database(){
+	alert_msg "Updating" "system package list"
+	echo
+
+	sudo apt-get -q update >/dev/null
 }
