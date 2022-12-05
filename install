@@ -72,24 +72,38 @@ install_packages(){
 	load_package_list
 	what_to_install
 
-	# NEED_PKG[python]=1
-	# NEED_PKG[lua]=1
-	# NEED_PKG[perl]=1
-	# NEED_PKG[ruby]=1
-	# NEED_PKG[rust]=1
-	# NEED_PKG[node]=1
+	install_pkg system ${=REQUIRED_PACKAGES[system]}
 
-	install_pkg system ${(s: :)REQUIRED_PACKAGES[system]}
+	local pkg
 
-	install_pkg node   ${(s: :)REQUIRED_PACKAGES[node]}
-	install_pkg python ${(s: :)REQUIRED_PACKAGES[python]}
-	install_pkg lua    ${(s: :)REQUIRED_PACKAGES[lua]}
-	install_pkg rust   ${(s: :)REQUIRED_PACKAGES[rust]}
-	install_pkg ruby   ${(s: :)REQUIRED_PACKAGES[ruby]}
-	install_pkg perl   ${(s: :)REQUIRED_PACKAGES[perl]}
+	for pkg in ${(k)NEED_PKG[(R)1]}; do
+		install_pkg $pkg ${=REQUIRED_PACKAGES[$pkg]}
+	done
 }
 
 what_to_install(){
+	local pkg item
+
+	local req_pkgs=(python node rust)
+	local conf_pkgs=(${${(k)REQUIRED_PACKAGES}:#system})
+
+	req_pkgs=(${req_pkgs:*conf_pkgs})
+
+	local -U pkgs=($req_pkgs)
+	pkgs+=(${${(k)REQUIRED_PACKAGES}:#system})
+
+	local preselected=()
+
+	[[ -n $req_pkgs ]] && preselected=($(for i in {1..$#req_pkgs}; do echo $i; done))
+
+	for i in {1..$#pkgs}; do
+		pkg=$pkgs[$i]
+		item="$pkg;$REQUIRED_PACKAGES[$pkg]"
+
+		[[ $#item -gt 64 ]] && item="${(r:60:)item} ..."
+
+		pkgs[$i]=$item
+	done
 
 	local selection=()
 	local menu_prompt=""
@@ -100,29 +114,10 @@ what_to_install(){
 	menu_prompt+="[${y}CTRL+O: ${n}end] "
 	menu_prompt+="[${y}CTRL+C: ${n}quit]"
 
-	# clear; echo
-
-	local pkgs=(
-		"python"
-		"node"
-		"rust"
-		"lua"
-		"ruby"
-		"perl"
-	)
-
-	local pkg i
-
-	for i in {1..$#pkgs}; do
-		pkg=$pkgs[$i]
-		pkg="$pkg;$REQUIRED_PACKAGES[$pkg]"
-		pkgs[$i]=$pkg
-	done
-
 	zmenu select selection\
 		--width 60 \
 		--selected-color "b" \
-		--selected "1 2 3" \
+		--selected "$preselected" \
 		--multy \
 		--focus 1 \
 		--color 'g y n' \
@@ -137,11 +132,9 @@ what_to_install(){
 
 	[[ -z $selection ]] && exit
 
-	for  pkg in $pkgs; do
-		NEED_PKG[${pkg%;*}]=0
-	done
+	typeset -gA NEED_PKG
 
-	for  i in $selection; do
+	for i in $selection; do
 		NEED_PKG[${pkgs[$i]%;*}]=1
 	done
 }
@@ -151,8 +144,6 @@ what_to_install(){
 #
 install_pkg(){
 	local type=$1; shift
-
-	[[ $NEED_PKG[$type] -eq 0 ]] && return
 
 	for pkg in $@; do
 		install_${type}_pkg $pkg
