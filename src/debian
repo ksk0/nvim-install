@@ -45,11 +45,37 @@ install_neovim(){
 	echo
 }
 
-node_latest(){
-	if [[ $1 = version ]] then
-		curl -fsSL https://deb.nodesource.com/setup_current.x |
-		grep 'NODEREPO="' |
-		sed -e 's/NODEREPO="//' -e 's/"//g'  -e 's/node_//'
+uninstall_pkg(){
+	local package=$1
+
+	local autoremove=($(
+		apt-get -s remove $package |
+		awk '
+			/^[^ \t]+/ {flag = 0}
+			flag {print}
+			/automatically installed and .* longer required:/ {flag = 1}
+		'
+	))
+
+	sudo apt-get --yes remove $package || return 1
+	sudo apt-get --yes autoremove || return 1
+
+	return 0
+}
+
+nodejs_org_version(){
+	if [[ $1 = web ]] then
+		local current=$(
+			curl -fsSL https://deb.nodesource.com/setup_current.x |
+			grep 'NODEREPO="' |
+			sed -e 's/NODEREPO="//' -e 's/"//g'  -e 's/node_//'
+		)
+
+		for i in {16..${current%.*}}; do
+			curl -fsSL "https://deb.nodesource.com/setup_${i}.x" |
+			grep 'NODEREPO="' |
+			sed -e 's/NODEREPO="//' -e 's/"//g'  -e 's/node_//'
+		done
 
 		return
 	fi
@@ -57,26 +83,20 @@ node_latest(){
 	if [[ $1 = repo ]] then
 		apt-cache policy |
 		grep -E 'https://deb\.nodesource\.com/node_.+\.x' |
-		sed -E -e 's;.+ https://deb.nodesource.com/;;' -e 's;(node_.+.x) .*;\1;'
+		sed -E -e 's;.+ https://deb.nodesource.com/;;' -e 's;node_(.+\.x) .*;\1;'
 
 		return
 	fi
 }
 
-install_node_latest(){
+register_nodejs_org(){
+	local version=$1
+	local repo=$(nodejs_org_version repo)
 
-	# retrieve version of lastest nodejs debian package
-	# on github
-	#
-	local latest=$(node_latest version)
-	local repo=$(node_latest repot)
-
-	if [[ $repo != $latest ]]; then
+	if [[ $repo != $version ]]; then
 		alert_msg "Registering repo for latest" "nodejs"
-		curl -fsSL https://deb.nodesource.com/setup_current.x | sudo -E bash -
+		curl -fsSL https://deb.nodesource.com/setup_$version | sudo -E bash -
 	fi
-
-	install_pkg system nodejs
 }
 
 install_node(){
@@ -86,66 +106,141 @@ install_node(){
 
 	local repo_version=$(sys_package version repo nodejs)
 	local inst_version=$(sys_package version installed nodejs)
-	local remote_version=$(node_latest version)
-	local latest_version
+	local web_version=($(nodejs_org_version web))
+	local remote_version=()
+
+	local repo_source=$(
+		apt show nodejs 2>/dev/null |
+		grep 'APT-Sources.*nodesource\....'
+	)
+
+	[[ -n $repo_source ]] && repo_source='r:nodejs.org' || repo_source='distro'
 
 	repo_version=$(normalize_version $repo_version)
 	inst_version=$(normalize_version $inst_version)
-	latest_version=${remote_version/%.x/.0}
 
-	local nstatus="installed"
-	local to_install=none
+	local version
+
+	for version in ${web_version/%.x/.0}; do
+		if is_newer $version $repo_version; then
+			remote_version+=(${version/%.0/.x})
+		fi
+	done
 
 	clear_screen 4
 
-	if [[ $repo_version -gt $inst_version ]] then
-		to_install=repo
+	if [[ -z $remote_version ]]; then
+		install_pkg system nodejs || return
 
-		if [[ $latest_version -gt $repo_version ]] then
-			cat <<-EOF | alert_box
-				${y}
-				Version availabel from ${n}nodejs.org ${y}site is higher
-				than version available in local repo:
-
-					 ${n}repo:         ${g}$repo_version
-					 ${n}nodejs.org:   ${g}$remote_version
-
-
-			${y}Installed version SHOULD NOT be less than ${g}$__NODE_MIN_VERSION
-		  ${n}
-			EOF
-
-			yesno_question "Do you want to install version from 'nodejs.org' [Y/n]:" Y
-
-			[[ $? -eq 0 ]] && to_install=remote
+		if [[ $repo_version = distro ]]; then
+			install_pkg system npm || return
 		fi
 
-	elif [[ $latest_version -gt $inst_version ]] then
-		cat <<-EOF | alert_box
-			${y}
-			Version availabel from ${n}nodejs.org ${y}site is higher
-			than installed version (and local repo version):
+		NODE_BIN=1
+		install_pkg node npm
 
-				 ${n}repo:         ${g}$repo_version
-				 ${n}installed:    ${g}$inst_version
-				 ${n}nodejs.org:   ${g}$remote_version
-
-
-			${y}Installed version SHOULD NOT be less than ${g}$__NODE_MIN_VERSION
-			${n}
-		EOF
-
-		yesno_question "Do you want to install version from 'nodejs.org' [Y/n]:" Y
-
-		[[ $? -eq 0 ]] && to_install=remote
+		return
 	fi
 
-	if [[ $to_install = "remote" ]] then
-		install_node_latest
-	elif [[ $to_install = "repo" ]] then
-		install_pkg system nodejs npm
+	cat <<-EOF | sed -e 's/^/    /' | alert_box --left
+		${y}
+		Version(s) availabel from ${n}nodejs.org ${y}site is higher than version
+		available in local repo:
+
+			 ${n}repo:         ${g}$repo_version
+			 ${n}nodejs.org:   ${g}$remote_version
+
+	${y}If you want, you can choose to install newer version of ${n}nodejs${y}.
+	${n}
+	EOF
+
+	local install_what="repo"
+	local install_version
+
+	if [[ $#remote_version -eq 1 ]]; then
+		yesno_question "Do you want to install latest version from 'nodejs.org' [Y/n]:" Y
+
+		if [[ $? -eq 0 ]]; then
+			install_what="web"
+			install_version=$remote_version
+		fi
+
 	else
-		count_action success system nodejs kept
+		local pkgs=("repo;$repo_source;$repo_version")
+			
+		pkgs+=(${${(@)remote_version/%.0/.x}/#/web;nodejs.org;})
+
+		echo PKGS:${(qq)pkgs}
+
+		local selection=()
+		local menu_prompt=""
+
+		menu_prompt+="[${g}ENTER: ${n}select] "
+		menu_prompt+="[${y}CTRL+C: ${n}quit]"
+
+		zmenu select selection\
+			--width 60 \
+			--selected-color "r" \
+			--selected "$preselected" \
+			--focus 1 \
+			--color 'g y n b' \
+			--align "r l l" \
+			--spaces "1 3 3" \
+			--no-bottom-line \
+			--title "${b}Select \"nodejs\" version to install:"\
+			--header "From;Source;Version" \
+			--prompt "$menu_prompt" \
+			$pkgs
+
+		echo
+
+		[[ -z $selection ]] && exit
+
+		local selected=(${(s:;:)pkgs[$selection]})
+
+		install_what=$selected[1]
+		# install_source=$selected[2]
+		install_version=$selected[3]
+	fi
+
+	if [[ $install_what = "web" ]] then
+		if [[ $inst_version -gt 0 ]]; then
+			cat <<-EOF | alert_box --expand
+			To install new version of nodejs from web,
+			we have to uninstall existing package
+			EOF
+
+			yesno_question "Do you want to procede with installation of nodejs [Y/n]:" Y
+
+			if [[ $? -ne 0 ]]; then
+				install_pkg system nodejs || return
+
+				NODE_BIN=1
+				install_pkg node npm
+
+				return
+			fi
+			
+			alert_msg "Uninstall [$OS]" nodejs
+			echo
+
+			sys_package uninstall nodejs
+			count_action $? system nodejs uninstall || return
+		fi
+
+		register_nodejs_org $install_version
+		install_pkg system nodejs || return
+
+	elif [[ $install_what = "repo" ]] then
+		install_pkg system nodejs || return
+
+	fi
+
+	if ! hash npm 2>/dev/null; then
+		# echo "NEED TO INSTALL NPM"
+		install_pkg system npm || return
+	else
+		# echo "NPM IS HERE"
 	fi
 
 	NODE_BIN=1
@@ -163,7 +258,7 @@ update_system(){
 		We can update and if necesary upgrade within the script.
 	EOF
 
-	yesno_question "${y}Do you want to update the package database [Y/n]:${n}" Y
+	yesno_question "Do you want to update the package database [Y/n]:" Y
 
 	if [[ $? -eq 0 ]] && update_system_database
 
@@ -205,7 +300,7 @@ update_system(){
 	else
 		alert_box --expand "Your system needs upgrade !!!"
 
-		if yesno_question "${y}Do you want to upgrades the system [y/N]:" N; then
+		if yesno_question "Do you want to upgrades the system [y/N]:" N; then
 			alert_msg "${y}Upgrading system packages ..."
 			echo
 
@@ -228,7 +323,7 @@ update_system(){
 			echo "They have to be installed manualy!"
 		} | sed -e 's/^/   /' | alert_box --expand --left
 
-		if yesno_question "${y}Do you want to install kept back packages [y/N]:" N; then
+		if yesno_question "Do you want to install kept back packages [y/N]:" N; then
 			alert_msg "${y}Installing kept back packages ..."
 			echo
 
@@ -245,7 +340,7 @@ update_system(){
 		{
 			echo "Following packages can be removed, since they are not needed:"
 			echo
-			echo ${(j:\n:)${(@)AUTO_REMOVE_PKGS/#/   ${n}}}
+			echo ${(j:\n:)${(@)autoremove/#/   ${n}}}
 			echo
 			echo "To remove them run:"
 			echo "   ${n}apt autoremove${y}"
