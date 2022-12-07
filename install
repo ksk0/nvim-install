@@ -72,6 +72,9 @@ install_packages(){
 	load_package_list
 	what_to_install
 
+	# typeset -A NEED_PKG
+	# NEED_PKG[node]=1
+
 	install_pkg system ${=REQUIRED_PACKAGES[system]}
 
 	local pkg
@@ -116,6 +119,7 @@ what_to_install(){
 
 	zmenu select selection\
 		--width 60 \
+		--header "Pkg;Modules" \
 		--selected-color "b" \
 		--selected "$preselected" \
 		--multy \
@@ -389,7 +393,7 @@ install_node_pkg(){
 	install_node
 
 	if [[ $NODE_BIN -eq 0 ]]; then
-		count_action fail node $package "node not installed"
+		count_action fail node $package "nodejs not installed"
 		return 1
 	fi
 
@@ -490,8 +494,6 @@ alert_msg(){
 	echo "${g}${(l:$alert_width::#:)void}"
 	echo "${g}# ${w}${action}${y} ${object}${n}"
 	echo "${g}${(l:$alert_width::#:)void}${n}"
-	# echo ${n}
-
 }
 
 register_neovim_app(){
@@ -728,6 +730,9 @@ check_if_root
 check_linux_flavour
 
 parse_arguments $@
+
+# install_node
+# exit
 
 $SCRIPT_COMMAND "${SCRIPT_ARGS[@]}"
 

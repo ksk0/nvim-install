@@ -3,7 +3,7 @@
 [arch]
 [debian]
 [common]
-	unzip tar gzip wget curl git perl python
+	unzip tar gzip wget curl git
 
 [python]
 	pynvim

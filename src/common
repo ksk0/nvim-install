@@ -214,15 +214,48 @@ sys_package_install(){
 	return $result
 }
 
+sys_package_uninstall(){
+	local width=$(tput cols)
+	local result
+
+	if [[ $width -gt 80 ]] then
+		stty cols 80
+	fi
+
+	if [[ $OS = suse ]] then
+		# sudo zypper install --no-confirm $1
+		# result=$?
+
+	elif [[ $OS = redhat ]] then
+		# sudo dnf install -y $1
+		# result=$?
+
+	elif [[ $OS = debian ]] then
+		uninstall_pkg $1
+		result=$?
+
+	elif [[ $OS = arch ]] then
+		sudo pacman -S --noconfirm $1
+		result=$?
+	fi
+
+	if [[ $width -gt 80 ]] then
+		stty cols $width
+	fi
+
+	return $result
+}
+
 
 sys_package(){
 	cmd=$1; shift
 
 	case $cmd in
-		action)   sys_package_action   "$@";;
-		provides) sys_package_provides "$@";;
-		version)  sys_package_version  "$@";;
-		install)  sys_package_install  "$@"; return $?;;
+		action)    sys_package_action    "$@";;
+		provides)  sys_package_provides  "$@";;
+		version)   sys_package_version   "$@";;
+		install)   sys_package_install   "$@"; return $?;;
+		uninstall) sys_package_uninstall "$@"; return $?;;
 	esac
 }
 

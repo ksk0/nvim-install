@@ -3,6 +3,19 @@
 autoload -U regexp-replace
 
 ###############################################
+# strip ansi escape characters from string
+#
+strip_ansi_escape(){
+	if [[ -o RE_MATCH_PCRE ]]; then
+		eval "regexp-replace $1 '(\x9B|\x1B\[)[0-9:;<>=?]*[ -\/]*[@-~]' ''"
+	else
+		setopt RE_MATCH_PCRE
+		eval "regexp-replace $1 '(\x9B|\x1B\[)[0-9:;<>=?]*[ -\/]*[@-~]' ''"
+		unsetopt RE_MATCH_PCRE
+	fi
+}
+
+###############################################
 # progress functions
 #
 zprogress(){
@@ -42,7 +55,8 @@ __zprogress_message (){
 	# be only possible coloring of text), and calculate
 	# text width.
 	#
-	regexp-replace text '(\x9B|\[)[0-9:;<>=?]*[ -\/]*[@-~]' ''
+	# regexp-replace text '(\x9B|\[)[0-9:;<>=?]*[ -\/]*[@-~]' ''
+	strip_ansi_escape text
 
 	local dots=$((text_width - 4 - ${#text}))
 	local void=""
@@ -146,7 +160,8 @@ __zprogress_spinner(){
 	# be only possible coloring of text), and calculate
 	# text width.
 	#
-	regexp-replace text '(\x9B|\[)[0-9:;<>=?]*[ -\/]*[@-~]' ''
+	# regexp-replace text '(\x9B|\[)[0-9:;<>=?]*[ -\/]*[@-~]' ''
+	strip_ansi_escape text
 
 	local dots=$((text_width - 4 - ${#text}))
 	local void=""
@@ -998,7 +1013,8 @@ __zmenu_calculate_widths(){
 	local max_width=0
 
 	for line in $zm_prompt $zm_title; do
-		regexp-replace line '(\x9B|\[)[0-9:;<>=?]*[ -\/]*[@-~]' ''
+		# regexp-replace line '(\x9B|\[)[0-9:;<>=?]*[ -\/]*[@-~]' ''
+		strip_ansi_escape line
 		[[ $#line -gt $max_width ]] && max_width=$#line
 	done
 
@@ -1203,7 +1219,7 @@ __zmenu_format_items(){
 				inv_line+="$org_cell"
 				sel_line+="$org_cell"
 
-			# add inverted cell to inverted line
+			# add inverted cell to inverted and selected line
 			#
 			else
 				inv_line+="\x1B${inv_cell}"
@@ -1226,6 +1242,7 @@ __zmenu_format_items(){
 
 		zm_items_fmt[1]=()
 		zm_items_inv[1]=()
+		zm_items_sel[1]=()
 	fi
 }
 
