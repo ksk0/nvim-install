@@ -152,11 +152,10 @@ load_package_list(){
 		'
 	)}")
 
-	local -U system_pkgs=(${=REQUIRED_PACKAGES[common]} ${=REQUIRED_PACKAGES[$OS]})
+	local -U system_pkgs=(${=REQUIRED_PACKAGES[system]} ${=REQUIRED_PACKAGES[$OS]})
 
 	REQUIRED_PACKAGES[system]=$system_pkgs
 
-	unset "REQUIRED_PACKAGES[common]"
 	unset "REQUIRED_PACKAGES[$OS]"
 }
 
