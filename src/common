@@ -92,7 +92,7 @@ count_success(){
 
 	[[ ${+__INSTALLED_PKGS[$pkg]} -eq 1 ]] && return
 
-	INSTALLED_PACKAGES+=("$1;$2;$3")
+	INSTALLED_PACKAGES+=("$1;$2;${3//ee/e}")
 
 	__INSTALLED_PKGS[$pkg]=1
 }
