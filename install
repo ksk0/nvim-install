@@ -40,15 +40,19 @@ exec_help(){
 
 	cat <<-EOF
 
-		   ${w}usage:${n}
+		   ${y}usage:${n}
 		      install COMMAND
 
-		   ${w}commands:${n}
+		   ${y}commands:${n}
 		      neovim     - install latest neovim
+		      cliboard   - install cliboard interface utility
 		      packages   - install other programs/modules (nodejs, ruby,
 		                   perl, pynvim, ruby nvim, rust, ...)
 
 		      all        - run all the above in single run
+
+		   ${y}note:${n}
+		      command names can be abbrevated: neo, cli, ...
 
 	EOF
 
@@ -58,6 +62,7 @@ exec_help(){
 exec_all(){
 	install_packages
 	install_neovim
+	install_cliboard
 }
 
 exec_neovim(){
@@ -66,6 +71,51 @@ exec_neovim(){
 
 exec_packages(){
 	install_packages
+}
+
+exec_cliboard(){
+	install_cliboard
+}
+
+install_cliboard(){
+	local selection
+	local menu_prompt=""
+
+
+	menu_prompt+="[${g}ENTER: ${n}select] "
+	menu_prompt+="[${y}CTRL+C: ${n}quit]"
+
+	local pkgs=(
+		"xclip;cliboard support on X11"
+		"xsel;cliboard support on X11"
+		"wl-clipboard;cliboard support on Wayland"
+		"   "
+		"none"
+	)
+
+	alert_msg "${y}Select cliboard support package"
+
+	zmenu select selection\
+		--width 60 \
+		--header "Pkg;Description" \
+		--selected-color "b" \
+		--focus 1 \
+		--color 'g y n' \
+		--align "r l l" \
+		--spaces "1 2 2" \
+		--no-bottom-line \
+		--prompt "$menu_prompt" \
+		$pkgs
+
+	echo
+
+	[[ -z $selection ]] && return
+
+	local selected=${pkgs[$selection]%%;*}
+
+	[[ $selected = none ]] && return
+
+	install_pkg system $selected
 }
 
 install_packages(){
@@ -528,9 +578,6 @@ register_neovim_app(){
 	[[ ${(L)yesno}  = $explicite ]] && [[ $action = Y ]] && return
 	[[ ${(L)yesno} != $explicite ]] && [[ $action = N ]] && return
 
-
-	set -u
-
 	echo
 	sudo update-alternatives --install /usr/bin/${link} ${link} "${APP_PATH}" 110
 	sudo update-alternatives --set ${link} "${APP_PATH}"
@@ -712,7 +759,7 @@ strip_ansi_escape(){
 }
 
 parse_arguments(){
-	local commands=(all neovim packages)
+	local commands=(all neovim packages cliboard)
 	local cmd=(${(M)commands:#${1}*}) 
 
 	[[ $#cmd -eq 0 ]] && SCRIPT_COMMAND="exec_help"                         
