@@ -1,8 +1,18 @@
-# list of packages to be installed
+# Here we can create a list of packages to be installed. Each section
+# (given within sqare brackets) represent group of packages/modules.
+#
+# System packages (installed with distribution's packaging system), are
+# listed in section "[system]". If package is specific to distribution
+# it should be listed in "[arc]" or "[debian]" section.
+#
+# In sections [python], [node], [rust], [lua], [ruby] and [perl] are 
+# listed modules of coresponding language.
+#
+# You can freelly extend below list to include extra packages/modules.
 #
 [arch]
 [debian]
-[common]
+[system]
 	unzip tar gzip wget curl git
 
 [python]
