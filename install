@@ -622,39 +622,53 @@ show_notifications(){
 		alert_box --expand "No packagages were installed !!!"
 	fi
 
+	local last_type
+
 	if [[ -n $INSTALLED_PACKAGES ]]; then
+		last_type=""
+
 		{
 			echo "Following packages were installed/upgraded/kept:"
 			echo
 			printf "${n}%-10s %-25s %s\n" "Type" "Package" "Action"
 			echo ${(l:60::-:)txt}
 
-			for package in $INSTALLED_PACKAGES; do
+			for package in ${(O)INSTALLED_PACKAGES}; do
 				local parts=("${(s:;:)package}")
+
+				[[ -n $last_type ]] && [[ $last_type != $parts[1] ]] && echo
 
 				echo -n "${y}${(r:10:)parts[1]}${n} "
 				echo -n "${n}${(r:25:)parts[2]}${n} "
 				echo -n "${b}${parts[3]}${n}"
 				echo
+
+				last_type=$parts[1]
 			done
 
 		} | sed -e 's/^/   /' | alert_box --left --expand
 	fi
 
 	if [[ -n $FAILED_PACKAGES ]]; then
+		last_type=""
+
 		{
 			echo "We failed to install following packages:"
 			echo
 			printf "${n}%-10s %-25s %-25s\n" "Type" "Package" "Reason"
 			echo "${(l:60::-:)void}"
 
-			for pkg in $FAILED_PACKAGES; do
+			for pkg in ${(O)FAILED_PACKAGES}; do
 				local parts=("${(s:;:)pkg}")
+
+				[[ -n $last_type ]] && [[ $last_type != $parts[1] ]] && echo
 
 				echo -n "${y}${(r:10:)parts[1]}${n} "
 				echo -n "${n}${(r:25:)parts[2]}${n} "
 				echo -n "${b}${parts[3]}${n}"
 				echo
+
+				last_type=$parts[1]
 			done
 
 			echo
