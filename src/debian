@@ -170,8 +170,6 @@ install_node(){
 			
 		pkgs+=(${${(@)remote_version/%.0/.x}/#/web;nodejs.org;})
 
-		echo PKGS:${(qq)pkgs}
-
 		local selection=()
 		local menu_prompt=""
 
