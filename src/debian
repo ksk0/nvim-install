@@ -250,7 +250,7 @@ update_system(){
 	[[ $UPGRADED -eq 1 ]] && return || UPGRADED=1
 
 	cat <<-EOF | alert_box --expand
-		${n}Before installing/updating any system packages,
+		${n}Before installing/updating any packages,
 		${n}ystem should be upgraded.
 
 		We can update and if necesary upgrade within the script.

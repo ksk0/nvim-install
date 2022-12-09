@@ -50,7 +50,7 @@ update_system(){
 	[[ $UPGRADED -eq 1 ]] && return || UPGRADED=1
 
 	cat <<-EOF | alert_box --expand
-		${n}Before installing/updating any system packages system should
+		${n}Before installing/updating any packages system should
 		${n}be upgraded. On Arch system you should do this manually, but
 		${n}we can check if  any upgrade is needed.
 

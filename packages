@@ -13,22 +13,22 @@
 [arch]
 [debian]
 [system]
-	unzip tar gzip wget curl git
+   unzip tar gzip wget curl git
 
 [python]
-	pynvim
+   pynvim
 
 [node]
-	neovim tree-sitter-cli
+   neovim tree-sitter-cli
   
 [rust]
-	fd::fd-find rg::ripgrep
+   fd::fd-find rg::ripgrep
 
 [lua]
-	toml
+   toml
 
 [ruby]
-	neovim
+   neovim
 
 [perl]
-	Neovim::Ext
+   Neovim::Ext
