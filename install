@@ -60,20 +60,24 @@ exec_help(){
 }
 
 exec_all(){
+	update_system
 	install_packages
 	install_neovim
 	install_cliboard
 }
 
 exec_neovim(){
+	update_system
 	install_neovim
 }
 
 exec_packages(){
+	update_system
 	install_packages
 }
 
 exec_cliboard(){
+	update_system
 	install_cliboard
 }
 
@@ -122,9 +126,6 @@ install_packages(){
 	load_package_list
 	what_to_install
 
-	# typeset -A NEED_PKG
-	# NEED_PKG[node]=1
-
 	install_pkg system ${=REQUIRED_PACKAGES[system]}
 
 	local pkg
@@ -167,6 +168,8 @@ what_to_install(){
 	menu_prompt+="[${y}CTRL+O: ${n}end] "
 	menu_prompt+="[${y}CTRL+C: ${n}quit]"
 
+	alert_msg "${y}Select group(s) of packages to install:"
+
 	zmenu select selection\
 		--width 60 \
 		--header "Pkg;Modules" \
@@ -178,7 +181,6 @@ what_to_install(){
 		--align "r l l" \
 		--spaces "1 2 2" \
 		--no-bottom-line \
-		--title "${b}Install following groups of packages:"\
 		--prompt "$menu_prompt" \
 		$pkgs
 
@@ -208,7 +210,6 @@ install_system_pkg (){
 	local todo
 	local package=$1
 
-	update_system
 	sys_package action todo $package
 
 	if [[ $todo = keep ]] then
@@ -636,7 +637,11 @@ show_notifications(){
 			for package in ${(O)INSTALLED_PACKAGES}; do
 				local parts=("${(s:;:)package}")
 
-				[[ -n $last_type ]] && [[ $last_type != $parts[1] ]] && echo
+				if [[ -n $last_type ]] && [[ $last_type != $parts[1] ]]; then
+					local len=($#last_type $#parts[1])
+					local cnum=${${(On)len}[1]}
+					echo "${s}${(l:$cnum::-:)txt}"
+				fi
 
 				echo -n "${y}${(r:10:)parts[1]}${n} "
 				echo -n "${n}${(r:25:)parts[2]}${n} "
@@ -661,7 +666,12 @@ show_notifications(){
 			for pkg in ${(O)FAILED_PACKAGES}; do
 				local parts=("${(s:;:)pkg}")
 
-				[[ -n $last_type ]] && [[ $last_type != $parts[1] ]] && echo
+				if [[ -n $last_type ]] && [[ $last_type != $parts[1] ]]; then
+					local len=($#last_type $#parts[1])
+					local cnum=${${(On)len}[1]}
+					echo "${s}${(l:$cnum::-:)txt}"
+				fi
+
 
 				echo -n "${y}${(r:10:)parts[1]}${n} "
 				echo -n "${n}${(r:25:)parts[2]}${n} "
