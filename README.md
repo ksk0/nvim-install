@@ -2,7 +2,7 @@
 Script for automated installation of nvim and accompanying packages and modules
 on **Arch** and/or **debian** based system.
 
-## Installation and usage
+## Installation
 Clone this repo and run `./install` script. Following help will appear  on
 screen:
 
@@ -24,6 +24,15 @@ note:
 
 Issue **install** with one of the given **"selections"**, and guided/automated
 process will start.
+
+### Note:
+If run on existing installation, script will **update** already installed packages!
+
+
+## Configuration
+List of packages and modules to be installed, are given in file `packages`.
+Content of the file can be freely edited, to include modules and packages
+according to your needs.
 
 
 ## Prerequisites
@@ -72,15 +81,22 @@ bricks/
 To be able to use installed packages, [**nvim-bricks**][1] plugin should be used.
 More about plugin can be found [**here**][1].
 
+
 ## Do I need these extra packages
 To be able to use **LSP** and **DAP** language servers, some extra packages
 have to be installed. Which one, depends on language/servers you are using.
 If you don't use any, or the one you use do not depend on programs installed
 with this script, you probably have no use from this script.
 
-**Rust** packages: **fd-find** and **ripgrep** are needed by
+### Rust:
+Packages: **fd-find** and **ripgrep** are needed by
 [**telescope.nvim**][2] plugin,
 if you don't use this plugin, you should not install this packages.
+
+### Node:
+On **Arch** system, **tree-sitter** installs  with **neovim**, thus you can
+exclude **tree-sitter-cli** package
+
 
 ## Issues 
 If you have any issues or comments, please be free to open an issue.
