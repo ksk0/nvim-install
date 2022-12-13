@@ -632,6 +632,9 @@ download_deb_pkg(){
 
 	echo
 	sudo apt install $pkg
+	local ret_val=$?
 
-	count_action $? system neovim install
+	count_action $ret_val system neovim install
+
+	return $ret_val
 }
