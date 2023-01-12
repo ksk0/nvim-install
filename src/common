@@ -247,22 +247,30 @@ sys_package_uninstall(){
 
 
 sys_package(){
-	cmd=$1; shift
+	local func=sys_package_$1
+
+	if typeset -f $func >/dev/null; then
+		$func $@
+		return
+	fi
+
+	local pkg=$1; shift
+	local cmd=$1; shift
 
 	case $cmd in
-		action)    sys_package_action    "$@";;
-		provides)  sys_package_provides  "$@";;
-		version)   sys_package_version   "$@";;
-		install)   sys_package_install   "$@"; return $?;;
-		uninstall) sys_package_uninstall "$@"; return $?;;
+		action)    sys_package_action    $pkg "$@";;
+		provides)  sys_package_provides  $pkg "$@";;
+		version)   sys_package_version   $pkg "$@";;
+		install)   sys_package_install   $pkg "$@"; return $?;;
+		uninstall) sys_package_uninstall $pkg "$@"; return $?;;
 	esac
 }
 
 sys_package_action(){
 		local __action
-		local __store=$1; shift
 		local __package=${1%/*}
 		local __version=${${${(M)1:#*/*}##*/}:-0.0}
+		local __store=$2
 
 		if [[ -n $PROVIDES_PATTERN[$__package] ]]; then
 			sys_package_action_multy  __action $1
@@ -282,8 +290,8 @@ sys_package_action_single(){
 	alert_msg "Checking [$OS]" "${package}"
 	echo
 
-	local inst_version=$(sys_package version installed $package)
-	local repo_version=$(sys_package version repo $package)
+	local inst_version=$(sys_package $package version installed)
+	local repo_version=$(sys_package $package version repo)
 	local have_version=$(normalize_version $repo_version)
 	local need_version=${(j:.:)${(@s:.:)version}[1,2]}
 
@@ -325,7 +333,7 @@ sys_package_action_multy(){
 
 	alert_msg "Checking [$OS]" "$package"
 
-	sys_package provides repo_packages $package
+	sys_package $package provides repo_packages
 
 	# echo REPO PACKAGES: ${(qq)repo_packages}
 
@@ -334,7 +342,7 @@ sys_package_action_multy(){
 	#
 	for pkg in $repo_packages; do
 		pkg_name=${pkg%%;*}
-		pkg_version=$(sys_package version installed $pkg_name)
+		pkg_version=$(sys_package $pkg_name version installed)
 		nrm_version=$(normalize_version $pkg_version)
 
 		# echo PN:$pkg_name

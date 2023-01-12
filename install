@@ -210,7 +210,7 @@ install_system_pkg (){
 	local todo
 	local package=$1
 
-	sys_package action todo $package
+	sys_package $package action todo
 
 	if [[ $todo = keep ]] then
 		count_action success system $package kept
@@ -229,7 +229,7 @@ install_system_pkg (){
 	alert_msg "Installing [$OS]" "${package}"
 
 	echo
-	sys_package install $package
+	sys_package $package install
 
 	count_action $? system $package install
 

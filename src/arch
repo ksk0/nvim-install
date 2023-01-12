@@ -1,8 +1,8 @@
 #!/usr/bin/zsh
 
 sys_package_version(){
-	local vtype=$1
-	local pkg=$2
+	local pkg=$1
+	local vtype=$2
 
 	case $vtype in
 		installed)

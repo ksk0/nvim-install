@@ -3,8 +3,8 @@
 OS_NAME=REDHAT-X
 
 sys_package_version(){
-	local vtype=$1
-	local pkg=$2
+	local pkg=$1
+	local vtype=$2
 
 	case $vtype in
 		installed)
@@ -14,6 +14,61 @@ sys_package_version(){
 			apt show $pkg 2>/dev/null | grep '^Version:' | sed -e 's/Version: //'
 			;;
 	esac
+}
+
+sys_package_lazygit(){
+	local pkg=$1; shift
+	local cmd=$1; shift
+
+	case $cmd in
+		action)    lazygit_action    $pkg "$@";;
+		provides)  lazygit_provides  $pkg "$@";;
+		version)   lazygit_version   $pkg "$@";;
+		install)   lazygit_install   $pkg "$@"; return $?;;
+		uninstall) lazygit_uninstall $pkg "$@"; return $?;;
+	esac
+}
+
+lazygit_action(){
+	sys_package_action $@
+}
+
+lazygit_version(){
+	local pkg=$1
+	local vtype=$2
+
+	case $vtype in
+		installed)
+			lazygit --version 2>/dev/null |
+				sed -e 's/, /\n/g' |
+				grep '^version=' |
+				sed -e 's/version=//'
+			;;
+		repo)
+			local url="https://api.github.com/repos/jesseduffield/lazygit/releases/latest"
+
+			curl -s $url |
+				grep '"tag_name":' |
+				sed -E 's/.*"v*([^"]+)".*/\1/'
+			;;
+	esac
+}
+
+lazygit_install(){
+	LAZYGIT_VERSION=$(lazygit_version lazygit repo)
+
+	url="https://github.com/jesseduffield/lazygit/releases/latest/download/"
+	url="${url}lazygit_${LAZYGIT_VERSION}_Linux_x86_64.tar.gz"
+
+	# curl -Lo lazygit.tar.gz $url
+	(
+		cd /usr/local/bin
+		curl -Lo - $url |
+		sudo tar zxf - lazygit
+	)
+}
+
+lazygit_uninstall(){
 }
 
 install_python(){
@@ -104,8 +159,8 @@ install_node(){
 
 	alert_msg "Checking [$OS]" nodejs
 
-	local repo_version=$(sys_package version repo nodejs)
-	local inst_version=$(sys_package version installed nodejs)
+	local repo_version=$(sys_package nodejs version repo)
+	local inst_version=$(sys_package nodejs version installed)
 	local web_version=($(nodejs_org_version web))
 	local remote_version=()
 
@@ -222,7 +277,7 @@ install_node(){
 			alert_msg "Uninstall [$OS]" nodejs
 			echo
 
-			sys_package uninstall nodejs
+			sys_package nodejs uninstall
 			count_action $? system nodejs uninstall || return
 		fi
 
