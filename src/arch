@@ -81,12 +81,24 @@ update_system(){
 
 	} | sed -e 's/^/   /' | alert_box --left --expand
 
+
 	echo
 	cat <<-EOF | alert_box --expand
 		Upgrade system manualy, and run install script again!
-
-		use: ${n}sudo pacman -Su
 	EOF
+
+	local keyring=${(M)upgradable:#archlinux-keyring}
+
+	if [[ -n $keyring ]]; then
+		echo "${y}run:${n}"
+		echo "  sudo pacman -Sy archlinux-keyring"
+		echo "  sudo pacman -Su"
+	else
+		echo "${y}run:${n}"
+		echo "  sudo pacman -Su"
+	fi 
+
+	echo
 	echo
 
 	exit

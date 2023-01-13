@@ -306,7 +306,7 @@ update_system(){
 
 	cat <<-EOF | alert_box --expand
 		${n}Before installing/updating any packages,
-		${n}ystem should be upgraded.
+		${n}system should be upgraded.
 
 		We can update and if necesary upgrade within the script.
 	EOF
