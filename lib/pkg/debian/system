@@ -1,0 +1,187 @@
+#!/usr/bin/zsh
+
+system_pkg_snapshot(){
+	apt list --installed 2>/dev/null |
+		grep -v 'Listing...' |
+		awk -F'/' '{print $1}'
+}
+
+system_pkg_version(){
+	local pkg=$1
+	local vtype=$2
+
+	case $vtype in
+		installed)
+			dpkg -l $pkg 2>/dev/null | grep '^i' | awk '{print $3}'
+			;;
+		repo)
+			apt show $pkg 2>/dev/null | grep '^Version:' | sed -e 's/Version: //'
+			;;
+	esac
+}
+
+system_pkg_doinstall(){
+	local width=$(tput cols)
+	local result
+
+	if [[ $width -gt 80 ]] then
+		stty cols 80
+	fi
+
+	sudo apt-get install --yes $1
+	result=$?
+
+	if [[ $width -gt 80 ]] then
+		stty cols $width
+	fi
+
+	return $result
+}
+
+system_pkg_uninstall(){
+	local pkg=$1
+
+	local pkg_present=$(
+		dpkg -l $pkg 2>/dev/null | grep '^i' 
+	)
+
+	[[ -z $pkg_present ]] && return 0
+
+	local autoremove=($(
+		apt-get -s remove $pkg |
+		awk '
+			/^[^ \t]+/ {flag = 0}
+			flag {print}
+			/automatically installed and .* longer required:/ {flag = 1}
+		'
+	))
+
+	sudo apt-get --yes remove $pkg || return 1
+
+	if [[ -n $autoremove ]]; then
+		 sudo apt-get --yes autoremove || return 1
+	fi
+
+	return 0
+}
+
+system_pkg_upgrade(){
+	[[ $SYSTEM_UPGRADED -eq 1 ]] && return 0 || SYSTEM_UPGRADED=1
+
+	cat <<-EOF | alert_box --expand
+		${n}Before installing/updating any packages,
+		${n}system should be upgraded.
+
+		We can update and if necesary upgrade within the script.
+	EOF
+
+	yesno_question "Do you want to update the package database [Y/n]:" Y
+
+	if [[ $? -eq 0 ]] && system_pkg_update
+
+	local test_run=$(apt-get -s upgrade)
+
+	local upgradable=($(
+		echo $test_run |
+		awk '
+			/^[^ \t]+/ {flag = 0}
+			flag {print}
+			/The following packages will be upgraded:/ {flag = 1}
+		'
+	))
+
+	local keptback=($(
+		echo $test_run |
+		awk '
+			/^[^ \t]+/ {flag = 0}
+			flag {print}
+			/The following packages have been kept back:/ {flag = 1}
+		'
+	))
+
+	local autoremove=($(
+		echo $test_run |
+		awk '
+			/^[^ \t]+/ {flag = 0}
+			flag {print}
+			/automatically installed and .* longer required:/ {flag = 1}
+		'
+	))
+
+	local modified=0
+
+	if [[ -z $upgradable ]]; then
+		echo
+		alert_box --expand "No package(s) need upgrade !!!"
+
+	else
+		alert_box --expand "Your system needs upgrade !!!"
+
+		if yesno_question "Do you want to upgrades the system [y/N]:" N; then
+			alert_msg "${y}Upgrading system packages ..."
+			echo
+
+			sudo apt-get upgrade -qq --yes
+			echo
+
+			modified=1
+		else
+			exit
+		fi
+
+	fi
+
+	if [[ -n $keptback ]]; then
+		{
+			echo "Following packages are kept back:"
+			echo
+			echo ${(j:\n:)${(@)keptback/#/   ${n}}}${y}
+			echo
+			echo "They have to be installed manualy!"
+		} | sed -e 's/^/   /' | alert_box --expand --left
+
+		if yesno_question "Do you want to install kept back packages [y/N]:" N; then
+			alert_msg "${y}Installing kept back packages ..."
+			echo
+
+			sudo apt-get install -qq --yes $keptback
+			echo
+
+			modified=1
+		else
+			exit
+		fi
+	fi
+
+	if [[ -n $autoremove ]]; then
+		{
+			echo "Following packages can be removed, since they are not needed:"
+			echo
+			echo ${(j:\n:)${(@)autoremove/#/   ${n}}}
+			echo
+			echo "To remove them run:"
+			echo "   ${n}apt autoremove${y}"
+		} | sed -e 's/^/   /' | alert_box --expand --left
+	fi
+
+	if [[ $modified -eq 1 ]]; then
+		alert_box --expand "Run installation script again!"
+
+		echo
+		exit
+	fi
+
+	return 0
+}
+
+system_pkg_update(){
+	alert_msg "Updating" "system package list"
+	echo
+
+	sudo -v
+	echo
+
+	sudo apt-get -q update >/dev/null &
+
+	zprogress wait $! "Downloading package list"
+}

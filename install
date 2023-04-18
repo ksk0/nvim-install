@@ -4,8 +4,10 @@ autoload -U regexp-replace
 
 SCRIPT_DIR=${0:a:h}
 
-source $SCRIPT_DIR/src/zfm
-source $SCRIPT_DIR/src/common
+# source $SCRIPT_DIR/src/zfm
+# source $SCRIPT_DIR/src/common
+
+source $SCRIPT_DIR/lib/core
 
 
 #############################################
@@ -527,26 +529,6 @@ install_rust_pkg(){
 #############################################
 # worker functions
 #
-clear_screen(){
-	for i in {1..$1}; do
-		echo -n '[A[2K'
-	done
-}
-
-alert_msg(){
-	local action=$1
-	local object=$2
-	local alert_width=80
-	local void
-
-	[[ -n $object ]] && action="${action}:"
-	
-	echo 
-	echo "${g}${(l:$alert_width::#:)void}"
-	echo "${g}# ${w}${action}${y} ${object}${n}"
-	echo "${g}${(l:$alert_width::#:)void}${n}"
-}
-
 register_neovim_app(){
 	local app=$1
 	local link=$2
@@ -584,33 +566,6 @@ register_neovim_app(){
 	sudo update-alternatives --set ${link} "${APP_PATH}"
 }
 
-
-yesno_question(){
-	local prompt=$1
-	local default=${(L)2}
-
-	local yesno
-
-	echo
-	while true; do
-		echo -n '[1A[2K'
-		echo -n "${prompt} "
-		read yesno
-
-		if [[ -z $yesno ]] || [[ ${(L)yesno} = y ]] || [[ ${(L)yesno} = n ]] then
-			echo 
-			break
-		fi
-	done
-
-	[[ $default = n ]] && [[ ${(L)yesno} != y ]] && return 1
-	[[ $default = y ]] && [[ ${(L)yesno} != n ]] && return 0
-
-	[[ ${(L)yesno} = y ]] && return 0
-	[[ ${(L)yesno} = n ]] && return 1
-
-	return 1
-}
 
 ##############################################################################
 # Show some notifications on end of install
@@ -687,101 +642,6 @@ show_notifications(){
 
 }
 
-alert_box(){
-	local width=80
-	local void
-	local align=C
-	local expand=0
-	local border="#"
-
-	############################################################
-	# parse command options 
-	#   --left       - text aligment
-	#   --right      -    -||-
-	#   --center     -    -||-
-	#
-	#   --expand     - add empty line before, and after text
-	#
-	local ARGS BORDER WIDTH
-
-	zparseopts -E -D -A ARGS \
-		-left \
-		-right \
-		-center \
-		-expand \
-		-width:=WIDTH \
-		-border:=BORDER
-
-	[[ ${+ARGS[--left]}   -eq 1 ]] && align=L
-	[[ ${+ARGS[--right]}  -eq 1 ]] && align=R
-	[[ ${+ARGS[--center]} -eq 1 ]] && align=C
-	[[ ${+ARGS[--expand]} -eq 1 ]] && expand=1
-
-	[[ -n $BORDER ]] && border=${${BORDER[2]}[1]}
-	[[ -n $WIDTH  ]] && width=${WIDTH[2]}
-
-	local lines=("$@")
-	local bline=${${(l:$width::.:)void}//./${border}}
-
-	[[ -z $lines ]] && lines=("${(@f)$(cat)}")
-
-	echo 
-	echo "${g}${bline}${n}"
-
-	[[ $expand -eq 1 ]] && echo "${g}${border}${(l:$((width - 2)):: :)void}${border}${n}"
-
-	local text
-	local len
-	local left
-	local right
-
-	for line in "${(@)lines}"; do
-		text=$line
-
-		# strip ansi sequence
-		#
-		strip_ansi_escape text
-
-		len=$#text
-
-		case $align in 
-			C)
-				left=$(((width - 2 - len) / 2))
-				right=$((width - 2 - len - left))
-				;;
-			L)
-				left=0
-				right=$((width - 2 - len ))
-				;;
-			R)
-				right=0
-				left=$((width - 2 - len ))
-				;;
-		esac
-
-		echo -n "${g}${border}${(l:$left:: :)void}${n}"
-		echo -n "${y}${line}${n}"
-		echo -n "${g}${(l:$right:: :)void}${border}${n}"
-		echo
-
-	done
-
-	[[ $expand -eq 1 ]] && echo "${g}${border}${(l:$((width - 2)):: :)void}${border}${n}"
-
-	echo "${g}${bline}${n}"
-	echo
-}
-
-strip_ansi_escape(){
-	if [[ -o RE_MATCH_PCRE ]]; then
-		eval "regexp-replace $1 '(\x9B|\x1B\[)[0-9:;<>=?]*[ -\/]*[@-~]' ''"
-	else
-		setopt RE_MATCH_PCRE
-		eval "regexp-replace $1 '(\x9B|\x1B\[)[0-9:;<>=?]*[ -\/]*[@-~]' ''"
-		unsetopt RE_MATCH_PCRE
-	fi
-}
-
 parse_arguments(){
 	local commands=(all neovim packages cliboard)
 	local cmd=(${(M)commands:#${1}*}) 
@@ -794,6 +654,12 @@ parse_arguments(){
 
 	SCRIPT_ARGS=("$@")
 }
+
+# zpackage system select-group
+zpackage system install curl par
+zpackage system install nodejs #/16.0
+
+exit
 
 init_colors
 

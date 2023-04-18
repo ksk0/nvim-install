@@ -1,0 +1,341 @@
+#!/usr/bin/zsh
+
+__PYTHON_HOME=$__NVIM_BRICKS/python
+
+#############################################
+# GARBAGE
+#
+python_pkg_install_ORG(){
+	local pkg=$1
+	local todo
+
+	zpackage python setup || return 1
+
+	python_package action $pkg todo
+	# echo "TODO:$todo $pkg"
+
+	if [[ $todo = keep ]] then
+		count_action success python $pkg kept
+		return 0
+	elif [[ $todo = missing ]] then
+		count_action fail python $pkg missing
+		return 1
+	elif [[ ${todo%%:*} = old ]] then
+		local parts=${(s.:.)todo}
+		count_action fail python $pkg "$parts[2] $parts[3]"
+		return 1
+	fi
+
+	pkg=${todo#*:}
+
+	alert_msg "Installing [python]" "${pkg}"
+
+	echo
+	zpackage python preinstall $pkg
+	zpackage python doinstall  $pkg
+	local result=$?
+	count_action $result python $pkg install
+	zpackage python postinstall $pkg
+
+	return $?
+}
+
+install_python_pkg_ORG(){
+	local package=$1
+
+	install_python
+
+	if [[ $PYTHON_BIN -eq 0 ]]; then
+		count_action fail python $package "python3 not installed"
+		return 1
+	fi
+
+	alert_msg "Checking [python]" "$package"
+
+	local has_pkg=$(pip3 list 2>/dev/null | grep "^$package ")
+
+	if [[ -z $has_pkg ]]; then
+		clear_screen 4
+
+		alert_msg "Installing [python]" "$package"
+
+		pip3 install $package
+
+		count_action $? python $package install
+		echo
+
+	else
+		local needs_update=$(pip3 list --outdated 2>/dev/null | grep "^$package ")
+
+		clear_screen 4
+
+		if [[ -n  $needs_update ]]; then
+			alert_msg "Upgrading [python]" "$package"
+
+			pip3 install --upgrade $package
+
+			count_action $? python $package upgrade
+			echo
+		else
+			count_action success python $package kept
+		fi
+	fi
+}
+
+python_pkg_version_ORG(){
+	local pkg=$1
+	local vtype=$2
+
+	local inst_version=$(
+		pip3 show $pkg 2>/dev/null |
+		grep '^Version:' |
+		awk '{print $2}'
+	)
+
+	if [[ $vtype = 'installed' ]]; then
+		echo $inst_version
+		return
+	fi
+
+	local repo_version
+
+	if [[ -n $inst_version ]]; then
+		repo_version=$(pip3 list -lo | grep -i "^${pkg} " | awk '{print $3}')
+
+		[[ -n $repo_version ]] && echo $repo_version && return
+	fi
+
+	local cwd=$(pwd)
+	local tmp_dir=$(mktemp -d)
+
+	cd $tmp_dir
+	pip3 download $pkg >/dev/null 2>&1
+
+	local package=$(ls -1)
+
+	[[ -z $package ]] && return
+
+	repo_version=$(
+		unzip -c $package '*/METADATA' |
+		grep '^Version: ' |
+		awk '{print $2}'
+	)
+
+	cd $cwd
+	rm -rf $tmp_dir
+
+	echo $repo_version
+}
+
+python_pkg_action_ORG(){
+	local __package=${1%/*}
+	local __version=${${${(M)1:#*/*}##*/}:-0.0}
+	local __store=$2
+	local __action
+
+	python_pkg_action_exec __action $1
+
+	eval "$__store=$__action"
+}
+
+python_pkg_action_exec_ORG(){
+	local action
+	local store=$1; shift
+	local package=${1%/*}
+	local version=${${${(M)1:#*/*}##*/}:-0.0}
+
+	alert_msg "Checking [pyhton]" "${package}"
+	echo
+
+	local inst_version=$(python_package version $package installed)
+	local repo_version=$(python_package version $package repo)
+	local inst_version_n=$(normalize_version $inst_version)
+	local repo_version_n=$(normalize_version $repo_version)
+	local need_version=${(j:.:)${(@s:.:)version}[1,2]}
+
+	echo "Installed: $inst_version"
+	echo "Repo:      $repo_version"
+	echo "Short:     $repo_version_n"
+	echo "Need:      $need_version"
+
+	if [[ -z inst_version ]]; then
+		if [[ -z $repo_version ]]; then
+			action=missing
+		elif ! is_newer $repo_version_n $need_version; then
+			action=old:$repo_version_n:$need_version
+		else
+			action=install:$package
+		fi
+
+	else
+		if [[ -z $repo_version ]]; then
+			action=keep
+		elif [[ $inst_version = $repo_version ]]; then
+			action=keep
+		elif ! is_newer $repo_version_n $inst_version_n; then
+			action=keep
+		else
+			action=install:$package
+		fi
+
+	fi
+
+	# if [[ -n $inst_version ]] && [[ -z $repo_version ]]; then
+	# 	action=keep
+	# elif [[ -z $repo_version ]]; then
+	# 	action=missing
+	# elif [[ $inst_version = $repo_version ]]; then
+	# 	action=keep
+	# elif is_newer $repo_version_n $need_version; then
+	# 	action=keep
+	# elif ! is_newer $repo_version_n $need_version; then
+	# 	action=old:$repo_version_n:$need_version
+	# else
+	# 	action=install:$package
+	# fi
+
+	eval "$store=$action"
+
+	clear_screen 9
+}
+
+python_pkg_venv_setup_ORG(){
+	local venv_path=$__PYTHON_HOME
+	local activate=$__PYTHON_HOME/bin/activate
+
+	alert_msg "Setting up" "python virtual env"
+
+	[[ -f $activate ]] ||  return 1
+
+	[[ -z $VIRTUAL_ENV ]] && source $activate
+
+	clear_screen 4
+
+	return 0
+}
+
+python_pkg_check_1(){
+	local pkg=$1
+
+
+	local inst_version=$(
+		pip3 show $pkg 2>/dev/null |
+		grep '^Version:' |
+		awk '{print $2}'
+	)
+
+	[[ -n $inst_version ]] && return 0
+
+	return 1
+}
+
+python_pkg_check_2(){
+	[[ ${+PYTHON_BIN} -eq 1 ]] && return $PYTHON_BIN
+
+	PYTHON_BIN=1
+
+	[[ -z $(which python3 2>/dev/null) ]] && return 1
+	[[ -z $(which pip3    2>/dev/null) ]] && return 1
+	[[ -n $(python3 -v venv 2>1 | grep 'named venv') ]] && return 1
+
+	PYTHON_BIN=0 && return 0
+}
+
+
+#############################################
+# python packages functions
+#
+python_pkg_setup(){
+	[[ ${+__PYTHON_SETUP} -eq 1 ]] && return $__PYTHON_SETUP
+
+	__PYTHON_SETUP=1
+
+	zpackage system install python || return 1
+	zpackage python install venv   || return 1
+	zpackage python install pip    || return 1
+
+	__PYTHON_SETUP=0
+
+	return 0
+}
+
+python_pkg_version(){
+	local pkg=$1
+	local vtype=$2
+
+	local inst_version=$(
+		pip3 show $pkg 2>/dev/null |
+		grep '^Version:' |
+		awk '{print $2}'
+	)
+
+	if [[ $vtype = 'installed' ]]; then
+		echo $inst_version
+		return
+	fi
+
+	local repo_version
+
+	if [[ -n $inst_version ]]; then
+		repo_version=$(pip3 list -lo | grep -i "^${pkg} " | awk '{print $3}')
+
+		[[ -n $repo_version ]] && echo $repo_version && return
+	fi
+
+	local cwd=$(pwd)
+	local tmp_dir=$(mktemp -d)
+
+	cd $tmp_dir
+	pip3 download $pkg >/dev/null 2>&1
+
+	local package=$(ls -1)
+
+	[[ -z $package ]] && return
+
+	repo_version=$(
+		unzip -c $package '*/METADATA' |
+		grep '^Version: ' |
+		awk '{print $2}'
+	)
+
+	cd $cwd
+	rm -rf $tmp_dir
+
+	echo $repo_version
+}
+
+python_pkg_doinstall(){
+	local package=$1
+
+	pip3 install $package
+	return $?
+}
+
+python_pkg_install_venv(){
+	local venv_path=$__PYTHON_HOME
+	local venv_cfg=$__PYTHON_HOME/pyvenv.cfg
+	local venv_lib=$__PYTHON_HOME/lib/python3
+	local activate=$__PYTHON_HOME/bin/activate
+
+	[[ -f $activate ]] && return 0
+
+	alert_msg "Installing" "python virtual env"
+
+	python3 -m venv \
+	--system-site-packages $venv_path \
+	>/dev/null 2>&1 || return 1
+
+	local version=$(
+		grep -E '^version\s*=\s*' $venv_cfg |
+		sed -E -e 's/^version\s*=\s*//' |
+		awk -F. '{print $1 "." $2}'
+	)
+
+	[[ -L $venv_lib ]] || ln -s python${version} $venv_lib
+	[[ -z $VIRTUAL_ENV ]] && source $venv_path/bin/activate
+
+	clear_screen 4
+
+	return 0
+}
+

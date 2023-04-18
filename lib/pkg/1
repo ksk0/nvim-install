@@ -1,0 +1,604 @@
+#!/usr/bin/zsh
+
+MULTY_VERSION_PACKAGE[nodejs]="YES"
+
+#############################################
+# GARBAGE
+#
+install_node_ORG(){
+	[[ ${+NODE_BIN} -eq 1 ]] && return
+
+	alert_msg "Checking [$OS]" nodejs
+
+	local repo_version=$(sys_package nodejs version repo)
+	local inst_version=$(sys_package nodejs version installed)
+	local web_version=($(nodejs_org_version web))
+	local remote_version=()
+
+	local repo_source=$(
+		apt show nodejs 2>/dev/null |
+		grep 'APT-Sources.*nodesource\....'
+	)
+
+	[[ -n $repo_source ]] && repo_source='r:nodejs.org' || repo_source='distro'
+
+	repo_version=$(normalize_version $repo_version)
+	inst_version=$(normalize_version $inst_version)
+
+	local version
+
+	for version in ${web_version/%.x/.0}; do
+		if is_newer $version $repo_version; then
+			remote_version+=(${version/%.0/.x})
+		fi
+	done
+
+	clear_screen 4
+
+
+	if [[ -z $remote_version ]]; then
+		install_pkg system nodejs || return
+
+		if [[ $repo_version = distro ]]; then
+			install_pkg system npm || return
+		fi
+
+		NODE_BIN=1
+		install_pkg node npm
+
+		return
+	fi
+
+	cat <<-EOF | sed -e 's/^/    /' | alert_box --left
+		${y}
+		Version(s) availabel from ${n}nodejs.org ${y}site is higher than version
+		available in local repo:
+
+			 ${n}repo:         ${g}$repo_version
+			 ${n}nodejs.org:   ${g}$remote_version
+
+	${y}If you want, you can choose to install newer version of ${n}nodejs${y}.
+	${n}
+	EOF
+
+	local install_what="repo"
+	local install_version
+
+	if [[ $#remote_version -eq 1 ]]; then
+		yesno_question "Do you want to install latest version from 'nodejs.org' [Y/n]:" Y
+
+		if [[ $? -eq 0 ]]; then
+			install_what="web"
+			install_version=$remote_version
+		fi
+
+	else
+		local pkgs=("repo;$repo_source;$repo_version")
+			
+		pkgs+=(${${(@)remote_version/%.0/.x}/#/web;nodejs.org;})
+
+		local selection=()
+		local menu_prompt=""
+
+		menu_prompt+="[${g}ENTER: ${n}select] "
+		menu_prompt+="[${y}CTRL+C: ${n}quit]"
+
+		zmenu select selection\
+			--width 60 \
+			--selected-color "r" \
+			--selected "$preselected" \
+			--focus 1 \
+			--color 'g y n b' \
+			--align "r l l" \
+			--spaces "1 3 3" \
+			--no-bottom-line \
+			--title "${b}Select \"nodejs\" version to install:"\
+			--header "From;Source;Version" \
+			--prompt "$menu_prompt" \
+			$pkgs
+
+		echo
+
+		[[ -z $selection ]] && exit
+
+		local selected=(${(s:;:)pkgs[$selection]})
+
+		install_what=$selected[1]
+		# install_source=$selected[2]
+		install_version=$selected[3]
+	fi
+
+	if [[ $install_what = "web" ]] then
+		if [[ $inst_version -gt 0 ]]; then
+			cat <<-EOF | alert_box --expand
+			To install new version of nodejs from web,
+			we have to uninstall existing package
+			EOF
+
+			yesno_question "Do you want to procede with installation of nodejs [Y/n]:" Y
+
+			if [[ $? -ne 0 ]]; then
+				install_pkg system nodejs || return
+
+				NODE_BIN=1
+				install_pkg node npm
+
+				return
+			fi
+			
+			alert_msg "Uninstall [$OS]" nodejs
+			echo
+
+			sys_package nodejs uninstall
+			count_action $? system nodejs uninstall || return
+		fi
+
+		register_nodejs_org $install_version
+		install_pkg system nodejs || return
+
+	elif [[ $install_what = "repo" ]] then
+		install_pkg system nodejs || return
+
+	fi
+
+	if ! hash npm 2>/dev/null; then
+		# echo "NEED TO INSTALL NPM"
+		install_pkg system npm || return
+	else
+		# echo "NPM IS HERE"
+	fi
+
+	NODE_BIN=1
+
+	install_pkg node npm
+}
+
+
+#############################################
+# node packages functions
+#
+system_pkg_doinstall_nodejs(){
+	local pkg=${1%/*}
+	local version=${1#*/}
+	local from=${version%-*}
+	echo 
+	echo "Installing NODEJS: $1"
+	echo
+
+	return
+
+	if [[ $install_what = "web" ]] then
+		if [[ $inst_version -gt 0 ]]; then
+			cat <<-EOF | alert_box --expand
+			To install new version of nodejs from web,
+			we have to uninstall existing package
+			EOF
+
+			yesno_question "Do you want to procede with installation of nodejs [Y/n]:" Y
+
+			if [[ $? -ne 0 ]]; then
+				install_pkg system nodejs || return
+
+				NODE_BIN=1
+				install_pkg node npm
+
+				return
+			fi
+			
+			alert_msg "Uninstall [$OS]" nodejs
+			echo
+
+			sys_package nodejs uninstall
+			count_action $? system nodejs uninstall || return
+		fi
+
+		register_nodejs_org $install_version
+		install_pkg system nodejs || return
+
+	elif [[ $install_what = "repo" ]] then
+		install_pkg system nodejs || return
+
+	fi
+
+	if ! hash npm 2>/dev/null; then
+		# echo "NEED TO INSTALL NPM"
+		install_pkg system npm || return
+	else
+		# echo "NPM IS HERE"
+	fi
+
+	NODE_BIN=1
+
+	install_pkg node npm
+}
+
+system_pkg_version_nodejs(){
+	local pkg=$1
+	local vtype=$2
+
+
+	if [[ $vtype = web ]] then
+		local current=$(
+			curl -fsSL https://deb.nodesource.com/setup_current.x |
+			grep 'NODEREPO="' |
+			sed -e 's/NODEREPO="//' -e 's/"//g'  -e 's/node_//'
+		)
+
+		for i in {16..${current%.*}}; do
+			curl -fsSL "https://deb.nodesource.com/setup_${i}.x" |
+			grep 'NODEREPO="' |
+			sed -e 's/NODEREPO="//' -e 's/"//g'  -e 's/node_//'
+		done
+
+		return
+	fi
+
+	if [[ $vtype = repo ]] || [[ $vtype = installed ]]; then
+		system_pkg_version $pkg $vtype
+
+		return
+	fi
+
+	if [[ $vtype = repo-x ]] then
+		apt-cache policy |
+		grep -E 'https://deb\.nodesource\.com/node_.+\.x' |
+		sed -E -e 's;.+ https://deb.nodesource.com/;;' -e 's;node_(.+\.x) .*;\1;'
+
+		return
+	fi
+}
+
+system_pkg_action_multy_nodejs(){
+	local package=${1%/*}
+	local need_version=${${${(M)1:#*/*}##*/}:-0.0}
+	local store=$2
+
+	alert_msg "Checking [$OS]" nodejs
+
+
+	############################################################
+	# get local repo version, already installed version and
+	# versions available from "nodej.org" web site.
+	#
+	local repo_version=$(zpackage system version nodejs repo)
+	local inst_version=$(zpackage system version nodejs installed)
+	local web_versions=($(zpackage system version nodejs web))
+
+
+	############################################################
+	# check source of currently installed version is it "OS"
+	# package, or the one downloaded from "nodejs.org" web.
+	#
+	# Avalilabel "nodejs" package, can be one from "OS"
+	# repositorie or from "nodejs.org", since later could be
+	# added to the list of repositories.
+	#
+	local repo_source=$(
+		apt show nodejs 2>/dev/null |
+		awk '/APT-Sources.*nodesource\.com/{print "r:nodejs.org"}'
+	)
+
+	[[ -z $repo_source ]] && repo_source=$DISTRO
+
+
+	############################################################
+	# Normalize versions
+	#
+	repo_version=$(pkg_version_normalize $repo_version)
+	inst_version=$(pkg_version_normalize $inst_version)
+
+	{
+		echo "NEED VERSION: $need_version"
+		echo "REPO VERSION: $repo_version"
+		echo "INST VERSION: $inst_version"
+		echo "WEB  VERSION: $web_versions"
+	}
+
+
+	############################################################
+	# Collect versions of "nodejs.org" web, which are higher
+	# then currently installed version and higher than "requested".
+	# If any, they will be offered as possible options to select from.
+	#
+	# While we compare to "repo" version of nodejs, this can 
+	# be one from "OS" repositorie or from "nodejs.org" since
+	# later could be added to the list of repositories. See above.
+	#
+	local remote_versions=()
+	local pkg_version
+
+	for pkg_version in ${web_versions/%.x/.0}; do
+		if
+			pkg_version_newer $pkg_version $repo_version &&
+			pkg_version_newer $pkg_version $need_version
+		then
+			remote_versions+=(${pkg_version/%.0/.x})
+		fi
+	done
+
+
+	############################################################
+	# Create a list of provided versions. Only add those which
+	# fullfill neaded version miminum.
+	#
+	local provided=()
+
+	if pkg_version_newer $repo_version $need_version; then
+		provided=("repo;$repo_source;$repo_version")
+	fi
+
+	for pkg_version in $remote_versions; do
+		provided+=("web;nodejs.org;${pkg_version}")
+	done
+
+	clear_screen 4
+
+
+	############################################################
+	# DETERMINE ACTION TO TAKE
+	#
+
+	############################################################
+	# If no "higher" versions are available from "nodejs.org"
+	# we will keep "repo" version ("OS" or "nodejs.org")
+	#
+	if [[ -z $remote_versions ]]; then
+		local pkg=$package/repo
+
+		local action=$(
+			pkg_action_define $pkg $need_version $repo_version $inst_version
+		)
+
+		eval "$store=$action"
+		return
+	fi
+
+	############################################################
+	# No repo version available
+	#
+	local lines=()
+
+	if [[ $#remote_versions -eq $#provided ]]; then
+		lines[1]="${n}nodejs${y} with version higher or equal to requested one"
+		lines[1]="$lines[1] (${n}$need_version${y}) is only"
+		lines[2]="available from ${n}nodejs.org${y}:"
+		lines[3]=""
+		lines[4]="   ${n}available versions: ${g}$remote_versions"
+	#
+	# ############################################################
+	# # Repo and remote versions avaliable
+	# #
+	else
+		lines[1]="Version(s) availabel from ${n}nodejs.org ${y}site"
+		lines[1]="$lines[1] is/are higher than version(s)"
+		lines[2]="available in local repo:"
+		lines[3]=""
+		lines[4]="   ${n}repo:         ${g}$repo_version"
+		lines[5]="   ${n}nodejs.org:   ${g}$remote_versions"
+	fi
+
+	echo ${(j:\n:)lines} |
+		sed -e 's/^/   /' |
+		alert_box --left --expand
+
+	############################################################
+	# If only one remote version available, ask directly if
+	# user wants to install that version.
+	#
+	if [[ $#remote_versions -eq 1 ]]; then
+		yesno_question 'Do you want to install from "nodejs.org" [Y/n]:' Y
+
+		if [[ $? -eq 0 ]]; then
+			local web_version=${remote_versions/.x/.0}
+			local pkg=$package/web-$remote_versions
+
+			local action=$(
+				pkg_action_define $pkg $need_version $web_version $inst_version
+			)
+
+			eval "$store=$action"
+			return
+		fi
+
+	fi
+
+
+	############################################################
+	# From menum select one of available options
+	#
+	local selection=()
+	local menu_prompt=""
+
+	menu_prompt+="[${g}ENTER: ${n}select] "
+	menu_prompt+="[${y}CTRL+C: ${n}quit]"
+
+	zmenu select selection\
+		--width 60 \
+		--selected-color "r" \
+		--selected "$preselected" \
+		--focus 1 \
+		--color 'g y n b' \
+		--align "r l l" \
+		--spaces "1 3 3" \
+		--no-bottom-line \
+		--title "${b}Select \"nodejs\" version to install:"\
+		--header "From;Packaged by;Version" \
+		--prompt "$menu_prompt" \
+		$provided
+
+	echo
+
+	if [[ -z $selection ]]; then
+		eval "$store=skipp"
+		return
+	fi
+
+	local selected=(${(s:;:)provided[$selection]})
+	local from=$selected[1]
+	local version=${selected[3]/.x/.0}
+	local pkg=$package/$from-$selected[3]
+
+	local action=$(
+		echo pkg_action_define $package $need_version $version $inst_version >&2
+		pkg_action_define $pkg $need_version $version $inst_version
+	)
+
+	eval "$store=$action"
+}
+
+register_nodejs_org(){
+	local version=$1
+	local repo=$(system_pkg_version_nodejs repo)
+
+	if [[ $repo != $version ]]; then
+		alert_msg "Registering repo for latest" "nodejs"
+		curl -fsSL https://deb.nodesource.com/setup_$version | sudo -E bash -
+	fi
+}
+
+install_node(){
+	[[ ${+NODE_BIN} -eq 1 ]] && return
+
+	alert_msg "Checking [$OS]" nodejs
+
+	local repo_version=$(zpackage system version nodejs repo)
+	local inst_version=$(zpackage system version nodejs installed)
+	local web_version=($(zpackage system version web))
+	local remote_version=()
+
+	local repo_source=$(
+		apt show nodejs 2>/dev/null |
+		grep 'APT-Sources.*nodesource\....'
+	)
+
+	[[ -n $repo_source ]] && repo_source='r:nodejs.org' || repo_source='distro'
+
+	repo_version=$(normalize_version $repo_version)
+	inst_version=$(normalize_version $inst_version)
+
+	local version
+
+	for version in ${web_version/%.x/.0}; do
+		if is_newer $version $repo_version; then
+			remote_version+=(${version/%.0/.x})
+		fi
+	done
+
+	clear_screen 4
+
+	if [[ -z $remote_version ]]; then
+		install_pkg system nodejs || return
+
+		if [[ $repo_version = distro ]]; then
+			install_pkg system npm || return
+		fi
+
+		NODE_BIN=1
+		install_pkg node npm
+
+		return
+	fi
+
+	cat <<-EOF | sed -e 's/^/    /' | alert_box --left
+		${y}
+		Version(s) availabel from ${n}nodejs.org ${y}site is higher than version
+		available in local repo:
+
+			 ${n}repo:         ${g}$repo_version
+			 ${n}nodejs.org:   ${g}$remote_version
+
+	${y}If you want, you can choose to install newer version of ${n}nodejs${y}.
+	${n}
+	EOF
+
+	local install_what="repo"
+	local install_version
+
+	if [[ $#remote_version -eq 1 ]]; then
+		yesno_question "Do you want to install latest version from 'nodejs.org' [Y/n]:" Y
+
+		if [[ $? -eq 0 ]]; then
+			install_what="web"
+			install_version=$remote_version
+		fi
+
+	else
+		local pkgs=("repo;$repo_source;$repo_version")
+			
+		pkgs+=(${${(@)remote_version/%.0/.x}/#/web;nodejs.org;})
+
+		local selection=()
+		local menu_prompt=""
+
+		menu_prompt+="[${g}ENTER: ${n}select] "
+		menu_prompt+="[${y}CTRL+C: ${n}quit]"
+
+		zmenu select selection\
+			--width 60 \
+			--selected-color "r" \
+			--selected "$preselected" \
+			--focus 1 \
+			--color 'g y n b' \
+			--align "r l l" \
+			--spaces "1 3 3" \
+			--no-bottom-line \
+			--title "${b}Select \"nodejs\" version to install:"\
+			--header "From;Source;Version" \
+			--prompt "$menu_prompt" \
+			$pkgs
+
+		echo
+
+		[[ -z $selection ]] && exit
+
+		local selected=(${(s:;:)pkgs[$selection]})
+
+		install_what=$selected[1]
+		# install_source=$selected[2]
+		install_version=$selected[3]
+	fi
+
+	if [[ $install_what = "web" ]] then
+		if [[ $inst_version -gt 0 ]]; then
+			cat <<-EOF | alert_box --expand
+			To install new version of nodejs from web,
+			we have to uninstall existing package
+			EOF
+
+			yesno_question "Do you want to procede with installation of nodejs [Y/n]:" Y
+
+			if [[ $? -ne 0 ]]; then
+				install_pkg system nodejs || return
+
+				NODE_BIN=1
+				install_pkg node npm
+
+				return
+			fi
+			
+			alert_msg "Uninstall [$OS]" nodejs
+			echo
+
+			sys_package nodejs uninstall
+			count_action $? system nodejs uninstall || return
+		fi
+
+		register_nodejs_org $install_version
+		install_pkg system nodejs || return
+
+	elif [[ $install_what = "repo" ]] then
+		install_pkg system nodejs || return
+
+	fi
+
+	if ! hash npm 2>/dev/null; then
+		# echo "NEED TO INSTALL NPM"
+		install_pkg system npm || return
+	else
+		# echo "NPM IS HERE"
+	fi
+
+	NODE_BIN=1
+
+	install_pkg node npm
+}

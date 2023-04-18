@@ -47,7 +47,7 @@ install_neovim(){
 }
 
 update_system(){
-	[[ $UPGRADED -eq 1 ]] && return || UPGRADED=1
+	[[ $SYSTEM_UPGRADED -eq 1 ]] && return || SYSTEM_UPGRADED=1
 
 	cat <<-EOF | alert_box --expand
 		${n}Before installing/updating any packages system should

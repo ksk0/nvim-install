@@ -1,0 +1,104 @@
+#!/usr/bin/zsh
+
+__NODE_HOME=$__NVIM_BRICKS/node
+
+
+#############################################
+# GARBAGE
+#
+node_pkg_install_ORG(){
+	local package=$1
+
+	install_node
+
+	if [[ $NODE_BIN -eq 0 ]]; then
+		count_action fail node $package "nodejs not installed"
+		return 1
+	fi
+
+	alert_msg "Checking [npm]" "$package"
+
+	export npm_config_prefix=$__NODE_HOME
+
+	local local_version=$(npm list -g --depth 0 2>/dev/null | grep " ${package}@" | sed -e "s/.* ${package}@//")
+
+	if [[ -z $local_version ]]; then
+		clear_screen 4
+
+		alert_msg "Installing [npm]" "$package"
+
+		npm install -g $package
+
+		count_action $? node $package install
+		echo
+	else
+		local repo_version=$(npm view ${package} version)
+
+		clear_screen 4
+
+		if [[ $local_version != $repo_version ]]; then
+			alert_msg "Upgrading [npm]" "$package"
+
+			npm install -g $package
+
+			count_action $? node $package upgrade
+			echo
+		else
+			count_action success node $package kept
+		fi
+	fi
+
+	unset npm_config_prefix
+}
+
+
+#############################################
+# node packages functions
+#
+node_pkg_setup(){
+	[[ ${+__NODE_SETUP} -eq 1 ]] && return $__NODE_SETUP
+
+	__NODE_SETUP=1
+	zpackage system install nodejs || return 1
+
+
+	export npm_config_prefix=$__NODE_HOME
+
+	zpackage node install npm || return 1
+
+	$__NODE_SETUP=0
+
+	return 0
+}
+
+node_pkg_version(){
+	local package=$1
+	local vtype=$2
+
+	if [[ $vtype = "installed" ]]; then
+		npm list -g --depth 0 2>/dev/null |
+			grep " ${package}@" |
+			sed -e "s/.* ${package}@//")
+
+	elif [[ $vtype = "installed" ]]; then
+		npm view ${package} version 2>/dev/null
+
+	fi
+}
+
+node_pkg_doinstall(){
+	local package=$1
+
+	npm install -g $package
+}
+
+
+#############################################
+# MISSING
+#
+node_pkg_check_MISSING(){
+}
+
+node_pkg_uninstall_MISSING(){
+}
+

@@ -1,0 +1,2011 @@
+#!/usr/bin/zsh
+
+[[ ${+NERD_FONTS_ZFM} -eq 1 ]] && return
+
+NERD_FONTS_ZFM=1
+
+autoload -U regexp-replace
+
+###############################################
+# strip ansi escape characters from string
+#
+strip_ansi_escape(){
+	if [[ -o RE_MATCH_PCRE ]]; then
+		eval "regexp-replace $1 '(\x9B|\x1B\[)[0-9:;<>=?]*[ -\/]*[@-~]' ''"
+	else
+		setopt RE_MATCH_PCRE
+		eval "regexp-replace $1 '(\x9B|\x1B\[)[0-9:;<>=?]*[ -\/]*[@-~]' ''"
+		unsetopt RE_MATCH_PCRE
+	fi
+}
+
+zfm_init(){
+	# by default open info channel and close
+	# debug channel (only if they are not
+	# already set )
+	#
+	#
+
+	# check if info channel is set, if not
+	# open it (redirect to tty)
+	#
+	if ! print -nu3 2>/dev/null; then
+			local terminal=$(tty 2>/dev/null)
+
+			if [[ -n $terminal ]]; then
+					exec 3>/dev/tty
+			else
+					exec 3>/dev/null
+			fi
+	fi
+}
+
+
+###############################################
+# progress functions
+#
+zprogress(){
+	local zp_cmd=$1; shift
+
+	case $zp_cmd; in
+		message) __zprogress_message  "$@";;
+		wait)    __zprogress_wait     "$@";;
+		end)     __zprogress_end      "$@";;
+	esac
+}
+
+__zprogress_end(){
+	local message=" $1"
+	local text=" $1"
+
+	__ZPROGRESS_RUNNER_PID=""
+
+	strip_ansi_escape text
+
+	echo "[${#text}D$message" >&3
+	zterm cursor restore >&3
+}
+
+__zprogress_spinner(){
+
+	zterm cursor off >/dev/tty
+	__zprogress_spinner_run "$@" &
+
+	__ZPROGRESS_RUNNER_PID=$!
+}
+
+__zprogress_message (){
+	local message=$1
+	local text=$1
+	local text_width=60
+
+	# remove ansi escape seqence from message (should
+	# be only possible coloring of text), and calculate
+	# text width.
+	#
+	# regexp-replace text '(\x9B|\[)[0-9:;<>=?]*[ -\/]*[@-~]' ''
+	strip_ansi_escape text
+
+	local dots=$((text_width - 4 - ${#text}))
+	local void=""
+
+	if [[ $text = $message ]]; then
+		message="${color_y}${message}"
+	fi
+
+	{
+		echo
+		echo -n $(zterm cursor up)
+		echo -n "   ${message}${color_n} ${(l:$dots::.:)void}"
+	} >&3
+}
+
+__zprogress_wait (){
+	local process_id=$1
+
+	{
+		zterm echo off
+		zterm cursor off
+	} >&3
+
+	# start spinner process
+	#
+	__zprogress_spinner "$@"
+
+	# show message on success/fail
+	#
+	local message
+	local color
+	local ret_val
+
+	wait $process_id; ret_val=$?
+
+	if [[ $ret_val -eq 0 ]]; then
+		color=32
+		message=" DONE"
+	elif [[ $ret_val -eq 127 ]]; then
+		color=32
+		message=" DONE"
+	else
+		color=31
+		message=" FAILED"
+	fi
+
+	{
+		echo "[${#message}D[${color}m${message}[0m"
+		zterm cursor restore
+		zterm echo restore
+	} >&3
+
+	return $ret_val
+}
+
+__zprogress_spinner(){
+	local process_id=$1
+	local message=$2
+	local text=$2
+	local text_width=60
+
+	###################################################
+	# To check if process is still alive we can use
+	# two methods:
+	#
+	#    1. /proc filesystem exists. We will check
+	#       for presenc of directory /proc/PID
+	#       if directory is presend, process is also
+	#       present
+	#
+	#    2. If /proc is not present. We will check
+	#       for process pressenc by issuing command
+	#
+	#          kill -0 PID
+	#
+	#       this does nothing, but checks if process
+	#       is still running.
+	#
+	# We will prefere first method, but first we have
+	# to check if /proc file system exists, and decide
+	# which method to use. We will check if /proc is
+	# mounted file system of not issuing 'stat' command.
+	#
+	# Since stat command ond BSD does not use same
+	# arguments as on Linux, we have to distinguishe
+	# which stat command we are using.
+	#
+	# To check if we are using BSD or Linux stat command
+	# we will call "stat -c" which on BSD will fail with
+	# error.
+	#
+	local stat_opt="-c"
+
+	stat -c %d:%D / >/dev/null 2>&1 || stat_opt="-f"
+
+	# now check if device number is same for / and /proc
+	# if same, than on /proc is not mounted filesystem
+	#
+	local is_proc=1
+
+	local root_id=$(stat $stat_opt "%d" /)
+	local proc_id=$(stat $stat_opt "%d" /proc 2>/dev/null)
+
+	[[ $root_id -eq $proc_id ]] && is_proc=0
+	
+	# remove ansi escape seqence from message (should
+	# be only possible coloring of text), and calculate
+	# text width.
+	#
+	# regexp-replace text '(\x9B|\[)[0-9:;<>=?]*[ -\/]*[@-~]' ''
+	strip_ansi_escape text
+
+	local dots=$((text_width - 4 - ${#text}))
+	local void=""
+
+	if [[ $text = $message ]]; then
+		message="${color_y}${message}"
+	fi
+
+	{
+		echo
+		echo -n $(zterm cursor up)
+		echo -n "   ${message}${color_n} ${(l:$dots::.:)void}"
+
+		local spinner_step=1
+		local step_time=0.08
+		local spinner='|/-\'
+
+		while true; do
+			echo -n '[2D' $spinner[$spinner_step]
+			sleep $step_time
+
+			if [[ $is_proc -eq 1 ]]; then
+				[[ ! -d /proc/$process_id ]] && break
+			else
+				kill -CONT $process_id >/dev/null 2>&1 || break
+			fi
+
+			spinner_step=$((++spinner_step))
+			[[ $spinner_step -gt 4 ]] && spinner_step=1
+		done
+
+		zterm cursos restore
+	} >&3
+}
+
+
+###############################################
+#  terminal functions
+#
+zterm(){
+	local cmd=$1; shift
+
+	case $cmd in
+		init)   __zterm_init   "$@";;
+		intr)   __zterm_intr   "$@";;
+		echo)   __zterm_echo   "$@";;
+		cursor) __zterm_cursor "$@";;
+		flush)  __zterm_flush  "$@";;
+		clear)  __zterm_clear  "$@";;
+		erase)  __zterm_clear  "$@";;
+		delete) __zterm_clear  "$@";;
+	esac
+}
+
+__zterm_init(){
+	local -A term_code=(
+		bsd-cursor-show  've'  linux-cursor-show  'cnorm'
+		bsd-cursor-hide  'vi'  linux-cursor-hide  'civis'
+	)
+
+	# check if we are on BSD or Linux system (stty
+	# uses different capability names on those os-es
+	#
+	local os=bsd
+
+	tput civis >/dev/null 2>&1 && os=linux
+
+	# get current state of INT signal shortcut 
+	# (usualy it is CTRL+C aka '^C'
+	#
+	local curr_intr=$(
+		stty -a |
+		grep 'intr' |
+		sed -E \
+			-e 's/.*intr *\= *([^;]+);.*/\1/' \
+			-e 's/[<>]//g'
+	)
+
+	__TERMINAL_CSHOW=$(tput $term_code[$os-cursor-show] 2>/dev/null)
+	__TERMINAL_CHIDE=$(tput $term_code[$os-cursor-hide] 2>/dev/null)
+	__TERMINAL_CLAST=$__TERMINAL_CSHOW
+
+	__TERMINAL_ECHO=(echo)
+	__TERMINAL_INTR=($curr_intr)
+	__TERMINAL_CURSOR=($__TERMINAL_CSHOW)
+}
+
+__zterm_intr(){
+
+	case $1 in
+		on) 
+			__TERMINAL_INTR+=("^C")
+
+			stty intr "" </dev/tty #>/dev/tty 2>/dev/null
+			;;
+
+		off)
+			__TERMINAL_INTR+=("undef")
+
+			stty intr undef </dev/tty #>/dev/tty 2>/dev/null
+			;;
+
+		restore)
+			[[ ${+__TERMINAL_INTR[-2]} -eq 0 ]] && return
+
+			stty intr "${${__TERMINAL_INTR[-2]}:-^C}" </dev/tty #>/dev/tty 2>/dev/null
+			__TERMINAL_INTR[-1]=()
+			;;
+	esac #>/dev/tty
+}
+
+__zterm_clear(){
+	case $1 in
+		line)  echo -n '[2K';;
+		left)  echo -n '[1K';;
+		right) echo -n '[K';;
+
+		screen|all|full)   echo -n '[2J';;
+		above|up|top)      echo -n '[1J';;
+		below|down|bottom) echo -n '[0J';;
+	esac #>/dev/tty
+}
+
+__zterm_echo(){
+
+	case $1 in
+		on) 
+			__TERMINAL_ECHO+=("echo")
+			stty echo #</dev/tty >/dev/tty 2>/dev/null
+			;;
+
+		off)
+			__TERMINAL_ECHO+=("-echo")
+			stty -echo #</dev/tty >/dev/tty 2>/dev/null
+			;;
+
+		restore)
+			[[ ${+__TERMINAL_ECHO[-2]} -eq 0 ]] && return
+
+			stty "${${__TERMINAL_ECHO[-2]}:-echo}" #</dev/tty >/dev/tty 2>/dev/null
+			__TERMINAL_ECHO[-1]=()
+			;;
+	esac #>/dev/tty
+}
+
+__zterm_cursor(){
+	local cmd=$1; shift
+
+	case $cmd in
+		pos|position)
+			__zterm_cursor_position "$@";;
+
+		move)  __zterm_cursor_move  "$@";;
+
+		up)     __zterm_cursor_move  up    "$@";;
+		down)   __zterm_cursor_move  down  "$@";;
+		left)   __zterm_cursor_move  left  "$@";;
+		right)  __zterm_cursor_move  rigth "$@";;
+		column) __zterm_cursor_move column "$@";;
+
+		on|show)
+			__TERMINAL_CURSOR+=($__TERMINAL_CSHOW)
+			echo -n "$__TERMINAL_CSHOW"
+			;;
+
+		off|hide)
+			__TERMINAL_CURSOR+=($__TERMINAL_CHIDE)
+			echo -n "$__TERMINAL_CHIDE"
+			;;
+
+		restore)
+			[[ ${+__TERMINAL_CURSOR[-2]} -eq 0 ]] && return
+
+			echo -n $__TERMINAL_CURSOR[-2]
+			__TERMINAL_CURSOR[-1]=()
+			;;
+	esac #>/dev/tty
+}
+
+__zterm_flush(){
+	local dump
+
+	echo "Pass 1"
+	while true; do
+		read -t dump </dev/tty || break;
+		echo "D:$dump"
+	done
+
+	echo "Pass 2"
+	while true; do
+		read -t -k 1 dump </dev/tty || break;
+		echo "D:$dump"
+	done
+
+	echo "Pass 2 done"
+	sleep 5
+}
+
+__zterm_cursor_position(){
+	[[ -n $1 ]] && __zterm_cursor_move position "$@" && return
+
+	local pos
+
+	zterm echo off
+
+	coproc {
+		local position dump
+
+		while true; do
+			read -d $'R' position </dev/tty
+			read -t 0.01 -k -d $'\e' dump </dev/tty || break
+		done
+
+		position="${position##*\[}"
+		echo "${(s:;:)position}"
+	}
+
+	echo -ne $'\e[6n' > /dev/tty
+
+	read pos <&p
+	echo "$pos"
+
+	zterm echo restore
+}
+
+__zterm_cursor_move(){
+	case $1 in
+		up) 	 	echo -en "\e[${2:-1}A";;
+		down) 	 	echo -en "\e[${2:-1}B";;
+		right) 	 	echo -en "\e[${2:-1}C";;
+		left) 	 	echo -en "\e[${2:-1}D";;
+		column)	 	echo -en "\e[${2:-1}G";;
+		position)	echo -en "\e[${2:-1};${3:-1}H";;
+	esac #>/dev/tty
+}
+
+
+###############################################
+#  menu functions
+#
+zmenu(){
+	local zm_cmd=$1; shift
+
+	case $zm_cmd in
+		select) __zmenu_select "$@";;
+		print)  __zmenu_print  "$@";;
+		init)   __zmenu_init   "$@";;
+	esac
+}
+
+__zmenu_init(){
+	zzle init
+	zzle map zmenu
+}
+
+__zmenu_select(){
+	# this is wraper  to call real menu selection
+	# function. This way we reduce posibility that
+	# local variable (of which there are a lot), 
+	# overshadows variable in which result will 
+	# be stored (given as first argument to the
+	# command).
+	#
+	local __zmenu_selection_storage=$1; shift
+	local __zmenu_selection
+
+	# call real selection function
+	#
+	__zmenu_exec_select "$@"
+
+	# store result in variable given as first
+	# argument.
+	#
+	eval  "${__zmenu_selection_storage}=($__zmenu_selection)"
+}
+
+__zmenu_print(){
+	eval "$(__zmenu_variables)"
+
+	__zmenu_parse_options "$@"
+	__zmenu_prepare_items
+	__zmenu_prepare_separation
+	__zmenu_prepare_formating
+	__zmenu_calculate_widths
+	__zmenu_format_items
+	__zmenu_create_space
+	__zmenu_print_full
+
+	zterm cursor position $zm_pos_zle 1 >&$zm_raw
+}
+
+
+#
+# parse options
+#
+__zmenu_variables(){
+	cat <<-EOF |
+		zm_raw=1           # should cursor movement be printed (default YES)
+		zm_multy=0         # will we select multiple items
+		                   # (default NO)
+		zm_width=0         # required minimal width of menu
+		zm_widths          # width of each columns
+		zm_color           # column colors
+		zm_ccolor=1        # should individaul cells be differently
+		                   # coloured (default to YES)
+		zm_scolor          # colors of selected item
+		zm_fcolor='d y'    # colors of item with focus (defaults
+		                        # to black fw and yellow bg)
+		zm_align           # column aligment
+		zm_offset=3        # offset of menu from left margine
+		zm_bar=";"         # column separator
+		zm_enum=1          # should items be numerated (default YES)
+
+		zm_header          # Header text (text for each column)
+		zm_prompt          # Below menu prompt text, it will be
+		                   # also used as prompt to enter item 
+		                   # number if that mode is enabled
+
+		zm_title           # Text above menu, if header is also
+		                   # present, one line space will be put
+		                   # between title and header, if there
+		                   # is no header, title will be just above
+		                   # menu. Title can be multiline, separated
+		                   # with newlines "\n"
+
+		zm_tline=1         # should line above items be shown
+		                   # (default YES)
+		                   #
+		zm_bline=1         # should line bellow items be shown
+		                   # (default YES)
+
+		zm_items=()        # original items will be stored here
+		zm_items_fmt=()    # formated items/lines will be stored here
+		zm_items_sel=()    # selected items/lines will be stored here
+		zm_items_inv=()    # items/lines prepared for inversion will
+		                   # be stored here
+
+		zm_spaces          # spaces between columns. By default between 
+		                   # each column there are 2 spaces, except after
+						   # enumeration column (if present) and selection
+						   # column (if present). We can give arbitrary
+						   # spaces between columns. Spaces need not be
+						   # space characers, but can be any string.
+
+		                   # positions of:
+		zm_pos_root        #  top left corner of menu
+		zm_pos_title       #  title text
+		zm_pos_head        #  header text
+		zm_pos_items       #  items start
+		zm_pos_prompt      #  prompt text
+		zm_pos_zle         #  where zle input will be done
+		           
+		zm_focus=1         # item with current focus
+		zm_focus_last      # last item with focus
+
+		zm_pre_selected    # list of pre_selected items
+		-A zm_selected     # list of selected items
+	EOF
+
+	sed -E -e 's/[ 	]*#.*//' |
+	grep -Ev '^\s*$' |
+	sed -e 's/^/local /' -e 's/$/;/'
+}
+
+__zmenu_parse_options(){
+
+	###########################################################################
+	# menu options:
+	#
+	#   --selected        list of preselected items
+	#   --raw             when printing menu do not include any
+	#                     cursor movement. It can be only used
+	#                     with "print" command.
+	#   --multy           should moultiple item be selected (NO)
+ 	#   --prompt          prompt shown below menu
+	#   --header          menu columns header
+	#   --title           text above menu (can be multi line)
+	#   --align           alignment of columns (see below)
+	#   --color           color of columns (see below)
+	#   --offset          offset from left margine
+	#   --separator       character used to separate
+	#                     column elements
+	#   --spaces          cpaces between columns (see below)
+	#
+	#   --focus           item with focus on start (defaults to 1)
+	#   --selected-color  color of selected item (mutliple selection)
+  #                     if not given, orignal color will be used
+	#   --focus-colors    colors of item with focus, colors are
+	#                     given with same letters as color of 
+	#                     columns. First is given color of characters
+	#                     and than color of background
+	#
+	#   --width           total width of menu. If required width is more
+	#                     than width of wiedest menu item, last column will
+	#                     be extended.
+	#
+	#   Some options are by default ON, so "no"
+	#   switches are given:
+	#
+	#   --no-top-line       do not show line above items
+	#   --no-bottom-line    do not show line below items
+	#   --no-enumerate      do not enumerate items
+	#   --no-cell-color     do not apply individual cell coloring
+	#
+	# Spaces:
+	#    By default each column is separated with next with 2 spaces, except
+	#    after enumeration column (if present) and selection column (if
+	#    present) which are folowed by single space. We can give arbitrary
+	#    separation between columns. Separation need not be space characers,
+	#    instead they can be any sequence of characters.
+	#
+	#    Separatorion is given as string of numbers or sequence of characters
+	#    (if sequence of characters contains spaces use quotes). If number
+	#    is given, separtion will consist of <SPACE> character (as much as
+	#    given number), otherwise sequence of characters will be used.
+	#    
+	#    Note:
+	#      There should be one less space than there are columns. If less
+	#      spaces are given than necesary, last space will be reused till
+	#      last column. Extra spaces will be ignored.
+	#
+	#    Examples:
+	#
+	#       --spaces "1 2 1 3"
+	#       --spaces "1 xx -- ' x '"
+	#       --spaces '2 zz -- " z "'
+	#
+	# Aligment:
+	#   Aligment of columns is given as string consisting of letters or
+	#   words. For each column there should be one entry (letter/word).
+	#   Entries are separated with space. Dot "." indicates that aligment
+	#   of previous column will be reused.  If no aligment is given (e.g.
+	#   less aligments than there are columns), last aligment will be
+	#   repeated till end.
+	#
+	#      word  letter    description
+	#      -----------------------------------------
+	#      left     l      left
+	#      right    r      right
+	#               .      same as previous column
+	#      
+	#
+	# Colors:
+	#   Color of columns is given as string consisting of letters or 
+	#   words describing color name. For each column there is one entry
+	#   (letter or word). Entries are separated with space. Dot "." indicates
+	#   that color of previous column will be reused. If no collor is given
+	#   (e.g. less colors than columns), last color will be repeated till end.
+	#
+	#   Letter and names of colors are specialy chosen, since some colors
+	#   beggin with same letter:
+	#
+	#      black -> dark   (d)
+	#      blue  -> blue   (b)
+	#
+	#      green -> geen   (g)
+	#      gray  -> silber (s)
+	#
+	#
+	#      word   letter    color description
+	#      -----------------------------------------
+	#      dark      d      black
+	#      red       r      red
+	#      green     g      green
+	#      yellow    y      yelow
+	#      blue      b      blue
+	#      magenta   m      magenta
+	#      cyan      c      cyan
+	#      white     w      white
+	#      silver    s      gray
+	#      none      n      no color
+	#                .      same as previous column
+	#      
+	#  Note:
+	#    For item with focus, both foreground and bakground colors can be
+	#    given using same letter/names as given above.
+	#
+
+	local M_PROMPT M_HEADER M_TITLE SEPARATOR C_COLOR
+	local ALIGN COLOR OFFSET WIDTH FOCUS F_COLOR S_COLOR SPACES SELECTED
+
+	zparseopts \
+		-E -D -A ARGS \
+		-focus:=FOCUS \
+		-width:=WIDTH \
+		-color:=COLOR \
+		-align:=ALIGN \
+		-title:=M_TITLE   \
+		-spaces:=SPACES   \
+		-offset:=OFFSET   \
+		-prompt:=M_PROMPT \
+		-header:=M_HEADER \
+		-selected:=SELECTED \
+		-separator:=SEPARATOR  \
+		-focus-colors:=F_COLOR \
+		-selected-color:=S_COLOR \
+		\
+		-raw   \
+		-multy \
+		-no-enumerate \
+		-no-top-line  \
+		-no-bottom-line \
+		-no-cell-color
+
+	# set values given with options
+	#
+	[[ -n $FOCUS      ]] && zm_focus=$FOCUS[2]
+	[[ -n $WIDTH      ]] && zm_width=(${=WIDTH[2]})
+	[[ -n $COLOR      ]] && zm_color=(${=COLOR[2]})
+	[[ -n $ALIGN      ]] && zm_align=(${=ALIGN[2]})
+	[[ -n $SPACES     ]] && zm_spaces=$SPACES[2]
+	[[ -n $F_COLOR    ]] && zm_fcolor=(${=F_COLOR[2]})
+	[[ -n $S_COLOR    ]] && zm_scolor=$S_COLOR[2]
+	[[ -n $M_TITLE    ]] && zm_title=$M_TITLE[2]
+	[[ -n $OFFSET     ]] && zm_offset=$OFFSET[2]
+	[[ -n $M_PROMPT   ]] && zm_prompt=$M_PROMPT[2]
+	[[ -n $M_HEADER   ]] && zm_header=$M_HEADER[2]
+	[[ -n $SEPARATOR  ]] && zm_bar=$SEPARATOR[2]
+	[[ -n $SELECTED   ]] && zm_pre_selected=(${=SELECTED[2]})
+
+	# set options given as arguments
+	#
+	[[ ${+ARGS[--raw]}   -eq 1 ]] && zm_raw=0
+	[[ ${+ARGS[--multy]} -eq 1 ]] && zm_multy=1
+
+	[[ ${+ARGS[--no-enumerate]}   -eq 1 ]] && zm_enum=0
+	[[ ${+ARGS[--no-top-line]}    -eq 1 ]] && zm_tline=0
+	[[ ${+ARGS[--no-bottom-line]} -eq 1 ]] && zm_bline=0
+	[[ ${+ARGS[--no-cell-color]}  -eq 1 ]] && zm_ccolor=0
+
+	[[ $zm_focus -gt $# ]] && zm_focus=$#
+
+	zm_items=("$@")
+	zm_focus_last=$zm_focus
+
+	if [[ $zm_cmd = print ]]; then
+		if [[ $zm_raw -eq 0 ]]; then
+			exec {zm_raw}>/dev/null
+		else
+			exec {zm_raw}>&1
+		fi
+
+	else
+		exec {zm_raw}>&1
+	fi
+}
+
+
+#
+# prepare menu
+#
+__zmenu_prepare_items(){
+	# reset heder, prompt and title if
+	# consists only of spaces
+	#
+	regexp-replace zm_header '^[ 	]+$' ''
+	regexp-replace zm_title  '^[ 	]+$' ''
+	regexp-replace zm_prompt '^[ 	]+$' ''
+
+	zm_title=("${(@s:\n:)zm_title}")
+
+	##################################################
+	# if header is given add it to the items
+	#
+	[[ -n $zm_header ]] && zm_items=("$zm_header" "${(@)zm_items}")
+
+
+
+	##################################################
+	# change to default separator to 'cancel'
+	# character # (\x18)
+	#
+	local row
+
+	for row in {1..$#zm_items}; do
+		zm_items[$row]="${zm_items[$row]//${zm_bar}/\\x18}"
+	done
+	
+
+	##################################################
+	# add multy selection columnd if required
+	#
+	if [[ $zm_multy -eq 1 ]]; then
+		for row in {1..$#zm_items}; do
+			[[ -z $zm_items[$row] ]] && continue
+		    [[ $zm_items[$row] =~ '^[\.\*-=~ ]{3,}$' ]] && continue
+
+			if [[ $row -eq 1 ]] && [[ -n $zm_header ]]; then
+				zm_items[1]="\x18${zm_items[1]}"
+			else
+				counter=$((++counter))
+				zm_items[row]="[ ]\x18${zm_items[row]}"
+			fi
+		done
+	fi
+	
+	##################################################
+	# enumerate items if required
+	#
+	local counter=0
+
+	if [[ $zm_enum -eq 1 ]]; then
+		for row in {1..$#zm_items}; do
+			# skip empty rows and "lines"
+			#
+			[[ -z $zm_items[$row] ]] && continue
+		    [[ $zm_items[$row] =~ '^[\.\*-=~ \t]{3,}$' ]] && continue
+
+			# Don't count header
+			#
+			if [[ $row -eq 1 ]] && [[ -n $zm_header ]]; then
+				zm_items[1]="No.\x18${zm_items[1]}"
+			else
+				counter=$((++counter))
+				zm_items[row]="$counter.\x18${zm_items[row]}"
+			fi
+		done
+	fi
+
+	##################################################
+	# some items could have less columns than other
+	# extend all items to same number of columns
+	#
+	local parts
+	local col_num=0
+
+	# get max number of columns
+	#
+	for row in {1..$#zm_items}; do
+		parts=("${(@s:\x18:)zm_items[$row]}")
+		[[ $col_num -lt $#parts ]] && col_num=$#parts
+	done
+
+	# extend "short" items
+	#
+	local diff
+	local void=""
+	local i
+
+	for row in {1..$#zm_items}; do
+		# skip empty rows and "lines"
+		#
+		[[ -z $zm_items[$row] ]] && continue
+	    [[ $zm_items[$row] =~ '^[\.\*-=~ \t]{3,}$' ]] && continue
+
+		parts=("${(@s:\x18:)zm_items[$row]}")
+		# echo "row:$row $#parts"
+
+		[[ $col_num -eq $#parts ]] && continue
+
+		diff=$((col_num - $#parts))
+
+		zm_items[$row]="${zm_items[$row]}${${(l:$diff::;:)void}//;/\\x18}"
+	done
+}
+
+__zmenu_prepare_separation(){
+
+	# define position of enumeration and selection
+	# column (if present)
+	#
+	local enum_column=0
+	local select_column=0
+
+	[[ $zm_enum  -eq 1 ]] && enum_column=1
+	[[ $zm_multy -eq 1 ]] && select_column=$((enum_column + 1))
+
+
+	##################################################
+	# define columns separation (spaces or other 
+	# characters printed between columns).
+	#
+	local spaces
+	local void=""
+	local suffix=""
+	local row_parts=("${(@s:\x18:)zm_items[1]}")
+	local column_no=$#row_parts
+
+	eval "spaces=($zm_spaces)"
+	zm_spaces=()
+
+	for col in {1..$column_no}; do
+		# if space for given column is given in 
+		# command line, use it
+		#
+		if [[ ${+spaces[$col]} -eq 1 ]]; then
+			if [[ $spaces[$col] =~ '^[0-9]+$' ]]; then
+				suffix=("${(l:$spaces[$col]:)vodi}")
+			else
+				suffix=("$spaces[$col]")
+			fi
+
+			zm_spaces+=($suffix)
+
+			continue
+		fi
+
+		# if space for current column is not given use
+		# default value
+		#
+		if [[ $col -eq $enum_column ]]; then
+			suffix=" "
+		elif [[ $col -eq $select_column ]]; then
+			suffix=" "
+		elif [[ $col -lt $column_no ]]; then
+			suffix="  "
+		fi
+
+		zm_spaces+=($suffix)
+	done
+
+	# separation after last column does not exist
+	#
+	zm_spaces[-1]=""
+}
+
+__zmenu_prepare_formating(){
+
+	# define color and aligment if enumeration
+	# is requested
+	#
+	if [[ $zm_enum -eq 1 ]]; then
+		[[ -z $zm_align ]] && zm_align=(r l)
+		[[ -z $zm_color ]] && zm_color=(b g)
+
+		zm_align[1]=r
+	else
+		[[ -z $zm_align ]] && zm_align=(r l)
+		[[ -z $zm_color ]] && zm_color=(g)
+	fi
+
+	# echo ALING:${(qq)zm_align}
+
+	# define color and aligment if multy
+	# selection mode is on
+	#
+	if [[ $zm_multy -eq 1 ]]; then
+		if [[ $zm_enum -eq 1 ]]; then
+			zm_color=($zm_color[1] n $zm_color[2,-1])
+			zm_align=($zm_align[1] l $zm_align[2,-1])
+		else
+			zm_color=(n $zm_color)
+			zm_align=(l $zm_align)
+		fi
+	fi
+
+	# remove dots "." from color, check for validity
+	# and add missing formating (if less than column
+	# number).
+	#
+	local last_color=n
+	local valid_color
+	local i
+
+	valid_color=(dark red green yellow blue magenta cyan white silver none)
+	valid_color+=(d   r   g     y      b    m       c    w     s      n)
+
+	for i in {1..$#zm_color}; do
+		zm_color[$i]=${valid_color[(r)${zm_color[$i]}]}
+
+		[[ -z $zm_color[$i] ]] && zm_color[$i]=$last_color && continue
+
+		zm_color[$i]=${${zm_color[$i]}[1]}
+		last_color=$zm_color[$i]
+	done
+
+	# echo ALING:${(qq)zm_align}
+
+	# remove dots "." from align, check for validity
+	# and add missing formating (if less than column
+	# number).
+	#
+	local last_align=l
+	local valid_aligns=(left right center l r c)
+
+	for i in {1..$#zm_align}; do
+		zm_align[$i]=${valid_aligns[(r)${zm_align[$i]}]}
+
+		[[ -z $zm_align[$i] ]] && zm_align[$i]=$last_align && continue
+
+		zm_align[$i]=${${zm_align[$i]}[1]}
+		last_align=$zm_align[$i]
+	done
+
+	# echo ALING:${(qq)zm_align}
+
+	##################################################
+	# define aligment and color which are missing
+	# also check validity of color and aligment
+	#
+	local row_parts=("${(@s:\x18:)zm_items[1]}")
+
+	last_color=$zm_color[-1]
+	last_align=$zm_align[-1]
+
+	for i in {1..$#row_parts}; do
+		[[ -z $zm_color[$i] ]] && zm_color[$i]=$last_color
+		[[ -z $zm_align[$i] ]] && zm_align[$i]=$last_align
+	done
+
+	# check color of focus
+	#
+	if [[ $#zm_fcolor -lt 2 ]]; then
+		zm_fcolor=(d y)
+
+	elif [[ $zm_fcolor[1] = $zm_fcolor[2] ]]; then
+		zm_fcolor=(d y)
+
+	elif [[ -z ${valid_color[(r)${zm_fcolor[1]}]} ]] ||
+	     [[ -z ${valid_color[(r)${zm_fcolor[2]}]} ]]
+	then
+		zm_fcolor=(d y)
+	fi
+
+	zm_fcolor=(${${zm_fcolor[1]}[1]} ${${zm_fcolor[2]}[1]})
+}
+
+__zmenu_calculate_widths(){
+
+	##################################################
+	# calculate column widths
+	#
+	local parts
+	local col
+	local item
+	local width
+
+	zm_widths=()
+
+	for row in {1..$#zm_items}; do
+		parts=("${(@s:\x18:)zm_items[$row]}")
+
+		for col in {1..$#parts}; do
+			item=$parts[$col]
+			width=${#item#?:}
+
+			[[ ${+zm_widths[$col]} -eq 0   ]] && zm_widths[$col]=0
+			[[ $zm_widths[$col] -lt $width ]] && zm_widths[$col]=$width
+		done
+	done
+
+
+	##################################################
+	# calculate max width between title and prompt
+	#
+	local line
+	local max_width=0
+
+	for line in $zm_prompt $zm_title; do
+		# regexp-replace line '(\x9B|\[)[0-9:;<>=?]*[ -\/]*[@-~]' ''
+		strip_ansi_escape line
+		[[ $#line -gt $max_width ]] && max_width=$#line
+	done
+
+
+	##################################################
+	# sum all column widhts plus space between them
+	# to get total width
+	#
+	local total_width=0
+
+	for col in {1..$#zm_widths}; do
+		total_width=$((total_width + ${zm_widths[$col]}))
+	done
+	
+	# add spacess in between
+	#
+	total_width=$((total_width + ${#${(j::)zm_spaces}}))
+
+
+	##################################################
+	# if menu width is given, and bigger than
+	# width of titl/prompt use that as max width
+	#
+	[[ $zm_width -gt $max_width ]] && max_width=$zm_width
+
+	# if max_width is bigger than total_width, extend
+	# last collumn
+	#
+	if [[ $max_width -gt $total_width ]]; then
+		zm_widths[-1]=$(($zm_widths[-1] + max_width - total_width))
+		total_width=$max_width
+	fi
+
+	##################################################
+	# set global variables to calculated values
+	#
+	zm_width=$total_width
+	zm_fcolor=($zm_fcolor[1] $zm_fcolor[2])
+}
+
+__zmenu_format_items(){
+
+	##################################################
+	# colors and aligment values
+	#
+	local -A aa=(
+		'l' 1
+		'r' r
+		'.' l
+	)
+
+	local -A fg=(
+		'd' '[30m'
+		'r' '[31m'
+		'g' '[32m'
+		'y' '[33m'
+		'b' '[34m'
+		'm' '[35m'
+		'c' '[36m'
+		'w' '[37m'
+		's' '[90m'
+		'n' '[0m'
+		'.' '[0m'
+	)
+
+	local -A bg=(
+		'd' '[40m'
+		'r' '[41m'
+		'g' '[42m'
+		'y' '[43m'
+		'b' '[44m'
+		'm' '[45m'
+		'c' '[46m'
+		'w' '[47m'
+		'n' ''
+		's' '[100m'
+	)
+
+
+	##################################################
+	# local variables
+	#
+	local void=""
+	local org_line inv_line sel_line
+	local char
+	local row col
+
+	local curr_align
+	local curr_color
+	local curr_width
+	local cell_width
+
+	local pre_width
+	local post_width
+
+	local suffix
+	local cell cells
+	local org_cell inv_cell sel_cell
+
+	# reset org_lines & inv_lines
+	#
+	zm_items_fmt=()
+	zm_items_sel=()
+	zm_items_inv=()
+
+	local row_parts
+
+	##################################################
+	# Do actual formating. Create regular menu
+	# line and inverted one (which will be used
+	# as current/active line)
+	#
+	for row in {1..$#zm_items}; do
+		org_line=""
+		sel_line=""
+		inv_line=""
+
+		row_parts=("${(@s:\x18:)zm_items[1]}")
+
+		###########################################
+		# If as item three or more characters are
+		# given, they will be treated specialy.
+		# Insted of menu item, line will be drawn.
+		#
+		# Alowed characters are:
+		#   *
+		#   .
+		#   -
+		#   =
+		#   ~
+		#   <SPACE>
+		#
+		#
+
+		if [[ -z $zm_items[$row] ]] ||
+		   [[ $zm_items[$row] =~ '^[\.\*-=~ ]{3,}$' ]]
+		then
+			char=${${zm_items[$row]}[1]}
+			org_line+="${void}${(l:$total_width::-:)void}"
+			org_line="${org_line//-/${char:- }}"
+
+			zm_items_fmt+=("$org_line")
+			zm_items_sel+=("")
+			zm_items_inv+=("")
+			continue
+		fi
+
+		cells=("${(@s:\x18:)zm_items[$row]}")
+
+		for col in {1..$#cells}; do
+			cell=${cells[$col]}
+
+			suffix=$zm_spaces[$col]
+			cur_align=$zm_align[$col]
+			cur_width=$zm_widths[$col]
+			cur_color=$fg[$zm_color[$col]]
+
+			sel_color=${zm_scolor:-${zm_color[$col]}}
+			sel_color=$fg[$sel_color]
+
+			[[ $zm_ccolor -eq 1 ]] && [[ $cell =~ '^.:' ]] && cur_color=$fg[${cell:0:1}]
+
+			# if header use no color
+			#
+			[[ $row -eq 1 ]] && [[ -n $zm_header ]] && cur_color=$fg[n]
+
+
+			################################
+			# format cell
+			#
+			if [[ $cur_align = r ]]; then
+				org_cell="${cur_color}${(l:$cur_width:)cell#?:}${fg[n]}${suffix}"
+				sel_cell="${sel_color}${(l:$cur_width:)cell#?:}${fg[n]}${suffix}"
+				inv_cell="${(l:$cur_width:)cell#?:}${suffix}"
+			elif [[ $cur_align = l ]]; then
+				org_cell="${cur_color}${(r:$cur_width:)cell#?:}${fg[n]}${suffix}"
+				sel_cell="${sel_color}${(r:$cur_width:)cell#?:}${fg[n]}${suffix}"
+				inv_cell="${(r:$cur_width:)cell#?:}${suffix}"
+			else
+				cell_width=${#${cell#?:}}
+				pre_width=$((cell_width + (cur_width - cell_width) / 2))
+				post_width=$((cur_width - pre_width))
+
+				org_cell="${cur_color}${(l:$pre_width:)cell#?:}${fg[n]}${(l:$post_width:)void}${suffix}"
+				sel_cell="${sel_color}${(l:$pre_width:)cell#?:}${fg[n]}${(l:$post_width:)void}${suffix}"
+				inv_cell="${(l:$pre_width:)cell#?:}${(l:$post_width:)void}${suffix}"
+			fi
+
+			################################
+			# add cell to line and inverted
+			# one
+			#
+			org_line+=$org_cell
+
+			# if header do nothing
+			#
+			[[ $row -eq 1 ]] && [[ -n $zm_header ]] && continue
+
+			# if it is row number do not invert
+			#
+			if [[ $col -eq 1 ]] && [[ $zm_enum -eq 1 ]]; then
+				inv_line+="$org_cell"
+				sel_line+="$org_cell"
+
+			# add inverted cell to inverted and selected line
+			#
+			else
+				inv_line+="\x1B${inv_cell}"
+				sel_line+="$sel_cell"
+			fi
+		done
+
+		inv_line="${inv_line/\\x1B/\\x18}"
+		inv_line="${inv_line//\\x1B/}"
+
+		zm_items_fmt+=("$org_line")
+		zm_items_sel+=("$sel_line")
+		zm_items_inv+=("$inv_line")
+	done
+
+	zm_fcolor="${fg[$zm_fcolor[1]]}${bg[$zm_fcolor[2]]}"
+
+	if [[ -n $zm_header ]]; then
+		zm_header="$zm_items_fmt[1]"
+
+		zm_items_fmt[1]=()
+		zm_items_inv[1]=()
+		zm_items_sel[1]=()
+	fi
+}
+
+
+#
+# menu execution
+#
+__zmenu_exec_select(){
+	eval "$(__zmenu_variables)"
+
+	zterm cursor off
+	zterm echo off
+
+	__zmenu_parse_options "$@"
+
+	__zmenu_prepare_items
+	__zmenu_prepare_separation
+	__zmenu_prepare_formating
+	__zmenu_calculate_widths
+	__zmenu_format_items
+	__zmenu_preselect_items
+
+	__zmenu_create_space
+	__zmenu_print_full
+
+	local key
+
+	while true; do
+		zterm cursor position $zm_pos_zle 1
+
+		zzle read zmenu key
+
+		case $key in;
+			UP)     __zmenu_item_prev;;
+			DOWN)   __zmenu_item_next;;
+			PgUp)   __zmenu_item_first;;
+			PgDown) __zmenu_item_last;;
+			HOME)   __zmenu_item_first;;
+			END)    __zmenu_item_last;;
+
+			CTRL_A) __zmenu_item_select_all;;
+			CTRL_N) __zmenu_item_select_none;;
+			CTRL_I) __zmenu_item_select_invert;;
+
+			SPACE)  __zmenu_item_select_toggle 0;;
+			ENTER)  __zmenu_item_select_toggle 1 && break ;;
+
+			ACCEPT) [[ $zm_multy -eq 1 ]] && break;;
+			QUIT)   break ;;
+
+		esac
+	done
+
+	__zmenu_move_focus 0
+
+	[[ $key = QUIT ]] && zm_selected=()
+
+	zterm cursor position $zm_pos_zle 1
+	zterm echo restore
+	zterm cursor restore
+
+	__zmenu_selection=(${(@n)${(@k)zm_selected[(R)1]}})
+}
+
+__zmenu_item_select(){
+	local action=$1
+	local curr=$2
+
+	local i_mark
+	local i_status
+
+	if [[ $action = TOGGLE ]]; then
+		if [[ $zm_selected[$curr] -eq 1 ]]; then
+			i_mark=" "
+			i_status=0
+		else
+			i_mark="X"
+			i_status=1
+		fi
+	elif [[ $action = ON ]]; then
+		i_mark="X"
+		i_status=1
+	else
+		i_mark=" "
+		i_status=0
+	fi
+
+	zm_selected[$curr]=$i_status
+	zm_items_fmt[$curr]="${zm_items_fmt[$curr]/\[?\]/[${i_mark}]}"
+	zm_items_sel[$curr]="${zm_items_sel[$curr]/\[?\]/[${i_mark}]}"
+	zm_items_inv[$curr]="${zm_items_inv[$curr]/\[?\]/[${i_mark}]}"
+}
+
+__zmenu_item_select_toggle(){
+	# if we are not in multy selection mode
+	# and <SPACE> is pressed than ignore
+	#
+	[[ $zm_multy -eq 0 ]] && [[ $1 -eq 0 ]] && return
+
+	__zmenu_item_select TOGGLE $zm_focus
+
+	[[ $zm_multy -eq 0 ]] && return 0
+
+	__zmenu_print_item $zm_focus
+	__zmenu_item_next
+
+	return 1
+}
+
+__zmenu_item_select_all(){
+	# run this only if multy selection is active
+	#
+	[[ $zm_multy -eq 0 ]] && return
+
+	local curr=$(($#zm_items_fmt + 1))
+
+	while [[ $curr -gt 1 ]]; do
+
+		curr=$((--curr))
+
+		[[ -z $zm_items_inv[$curr] ]] && continue
+
+		__zmenu_item_select ON $curr
+		__zmenu_print_item $curr
+	done
+}
+
+__zmenu_item_select_none(){
+	# run this only if multy selection is active
+	#
+	[[ $zm_multy -eq 0 ]] && return
+
+	local curr=$(($#zm_items_fmt + 1))
+
+	while [[ $curr -gt 1 ]]; do
+		curr=$((--curr))
+
+		[[ -z $zm_items_inv[$curr] ]] && continue
+
+		__zmenu_item_select OFF $curr
+		__zmenu_print_item $curr
+	done
+}
+
+__zmenu_item_select_invert(){
+	# run this only if multy selection is active
+	#
+	[[ $zm_multy -eq 0 ]] && return
+
+	local curr=$(($#zm_items_fmt + 1))
+
+	while [[ $curr -gt 1 ]]; do
+		curr=$((--curr))
+
+		[[ -z $zm_items_inv[$curr] ]] && continue
+
+		__zmenu_item_select TOGGLE $curr
+		__zmenu_print_item $curr
+	done
+}
+
+__zmenu_preselect_items(){
+
+	# preselect items
+	#
+	local i
+	for i in $zm_pre_selected; do
+		__zmenu_item_select ON  $i
+	done
+}
+
+
+#
+# print menu
+#
+__zmenu_print_full(){
+	local void=""
+
+	zterm cursor position $zm_pos_root 1 >&$zm_raw
+
+	# escape codes:
+	#   [K   - erase line from cursor till end
+	#   [2K  - erase entire line
+	#   [0m  - reset any coloring
+	#
+
+	# empty LINE
+	#
+	echo "[2K"
+
+	# TITLE
+	#
+	if [[ -n $zm_title ]]; then
+		echo "${(@j:\n:)${(@)${(@)zm_title/#/${(l:$zm_offset:)void}}/%/[0m[K}}"
+		[[ -n $zm_header ]] && echo "[2K"
+	fi
+
+	# HEADER
+	#
+	if [[ -n $zm_header ]]; then
+		echo "${(l:$zm_offset:)void}${zm_header}[0m[K"
+	fi
+
+	# TOP LINE
+	#
+	if [[ $zm_tline -eq 1 ]]; then
+		echo "${(l:$zm_offset:)void}${(l:$zm_width::-:)void}[0m[K"
+	fi
+
+	# CONTENT
+	#
+	local i
+
+	for i in {1..$#zm_items_fmt}; do
+		__zmenu_print_item $i
+	done
+
+	# BOTTOM LINE
+	#
+	if [[ $zm_bline -eq 1 ]]; then
+		echo "${(l:$zm_offset:)void}${(l:$zm_width::-:)void}[0m[K"
+	fi
+
+	# PROMPT
+	#
+	if [[ -n $zm_prompt ]]; then
+		echo "[K\n${(l:$zm_offset:)void}${zm_prompt}[0m[K"
+	fi
+
+	echo "[2K"
+	echo "[2K"
+}
+
+__zmenu_print_item(){
+	local item_no=$1
+
+	zterm cursor position $((zm_pos_items + item_no - 1)) 1 >&$zm_raw
+
+	local item
+	if [[ $item_no -eq $zm_focus ]]; then
+		item="${zm_items_inv[$item_no]/\\x18/${zm_fcolor}}[0m"
+	elif [[ -n $zm_selected[$item_no] ]] && [[ $zm_selected[$item_no] -eq 1 ]]; then
+		item="${zm_items_sel[$item_no]}"
+	else
+		item="${zm_items_fmt[$item_no]}"
+	fi
+
+	echo "${(l:$zm_offset:)void}${item}[K"
+}
+
+__zmenu_move_focus(){
+	[[ -n $1 ]] && zm_focus=$1
+
+	[[ $zm_focus_last -eq $zm_focus ]] && return
+
+	[[ $zm_focus_last -ne 0 ]] && __zmenu_print_item $zm_focus_last
+	[[ $zm_focus      -ne 0 ]] && __zmenu_print_item $zm_focus
+
+	zm_focus_last=$zm_focus
+}
+
+__zmenu_create_space(){
+	local header_height=1
+	local prompt_height=1
+
+	[[ -z $zm_header ]] && header_height=0
+	[[ -z $zm_prompt ]] && prompt_height=0
+
+	local title_parts=("${(@)zm_title}")
+	local title_height=$#title_parts
+
+	[[ -z $title_parts  ]] && title_height=0
+
+
+	# if there is header and title add extra space
+	#
+	[[ $header_height -ne 0 ]] &&
+	[[ $title_height  -ne 0 ]] && title_height=$((++title_height))
+
+	# if there is prompt add extra space before prompt
+	# 
+	[[ $prompt_height -ne 0 ]] && prompt_height=$((++prompt_height))
+
+
+	# calculate total height of menu
+	#
+	local menu_height=$((
+		1 +
+		title_height +
+		header_height +
+		zm_tline +
+		$#zm_items_fmt +
+		zm_bline +
+		prompt_height +
+		2
+	))
+
+	# echo HEADER HIGHT: $header_height
+	# echo TITLE HEIGHT: $title_height
+	# echo TOP LINE H:   $zm_tline
+	# echo ITEMS NO:     $#zm_items_fmt
+	# echo BOT LINE H:   $zm_bline
+	# echo PROMPT HEI:   $prompt_height
+	# echo "-----------------------------"
+
+	# if we don't have enough space below
+	# current position, add extra lines
+	# so we can have enough space for menu
+	#
+	local lines=$(tput lines)
+	local position=($(zterm cursor position))
+
+	local missing=$((menu_height - (lines - $position[1])))
+
+	# echo LINES:    $lines
+	# echo POSITION: $position
+	# echo MENU:     $menu_height
+	# echo MISSING:  $missing
+
+	if [[ $missing -gt 0 ]]; then
+		local i
+
+		zterm cursor position $lines 1 >&$zm_raw
+		for i in {1..$missing}; do echo >&$zm_raw; done
+		position[1]=$(($position[1] - missing))
+	fi
+
+	# echo POSITION: $position
+	# read -s a
+
+	zm_pos_root=$position[1]
+	zm_pos_title=$((zm_pos_root + 1))
+	zm_pos_head=$((zm_pos_title + title_height))
+	zm_pos_items=$((zm_pos_head + header_height + zm_tline))
+	zm_pos_prompt=$((zm_pos_items + $#zm_items_fmt + zm_bline))
+	zm_pos_zle=$((zm_pos_prompt + prompt_height))
+
+	# echo POS ROOT:$zm_pos_root
+	# echo POS TITLE:$zm_pos_title
+	# echo POS HEAD:$zm_pos_head
+	# echo POS ITEMS:$zm_pos_items
+	# echo POS PROMPT:$zm_pos_prompt
+	# echo POS ZLE:$zm_pos_zle
+}
+
+
+#
+# navigate menu
+#
+__zmenu_item_prev(){
+	local curr=$zm_focus
+
+	while [[ $curr -gt 1 ]]; do
+		curr=$((--curr))
+		[[ -z $zm_items_inv[$curr] ]] && continue
+
+		zm_focus=$curr
+		break
+	done
+
+	__zmenu_move_focus
+}
+
+__zmenu_item_next(){
+	local curr=$zm_focus
+
+	while [[ $curr -lt $#zm_items_fmt ]]; do
+		curr=$((++curr))
+		[[ -z $zm_items_inv[$curr] ]] && continue
+
+		zm_focus=$curr
+		break
+	done
+
+	__zmenu_move_focus
+}
+
+__zmenu_item_first(){
+	local curr=0
+
+	while [[ $curr -lt $#zm_items_fmt ]]; do
+		curr=$((++curr))
+		[[ -z $zm_items_inv[$curr] ]] && continue
+
+		zm_focus=$curr
+		break
+	done
+
+	__zmenu_move_focus
+}
+
+__zmenu_item_last(){
+	local curr=$(($#zm_items_fmt + 1))
+
+	while [[ $curr -gt 1 ]]; do
+		curr=$((--curr))
+		[[ -z $zm_items_inv[$curr] ]] && continue
+
+		zm_focus=$curr
+		break
+	done
+
+	__zmenu_move_focus
+}
+
+
+###############################################
+#  zle functions
+#
+zzle(){
+	local zzle_cmd=$1; shift
+
+	case $zzle_cmd in
+		init)  __zzle_init "$@";;
+		read)  __zzle_read "$@";;
+		map)   __zzle_map  "$@";;
+	esac
+}
+
+__zzle_init(){
+	__zzle_load_widgets
+}
+
+__zzle_read(){
+	local __zzle_container=$2
+	local __zzle_key_map=${1:-default_keymap}
+	local __zzle_prompt=()
+	local __zzle_input
+	local __zzle_old_keytimout=$KEYTIMEOUT
+	local __zzle_key_code=''
+
+	setopt SINGLE_LINE_ZLE
+	export KEYTIMEOUT=100
+
+	vared \
+		-M $__zzle_key_map $__zzle_prompt \
+		-i __zzle_vared_init   \
+		-f __zzle_vared_finish \
+		__zzle_input
+
+	KEYTIMEOUT=$__zzle_old_keytimout
+
+	eval "${__zzle_container}=\"$__zzle_key_code\""
+}
+
+
+#
+# zle initialization
+#
+__zzle_map(){
+	local key_map=$1; shift
+
+	# list of key names as defined in terminfo for
+	# bsd and linux
+	#
+	local -A key_name=(
+		bsd-end        '@7'    linux-end       'kend'
+		bsd-home       'kh'    linux-home      'khome'
+		bsd-up         'ku'    linux-up        'kcuu1'
+		bsd-down       'kd'    linux-down      'kcud1'
+		bsd-left       'kl'    linux-left      'kcub1'
+		bsd-right      'kr'    linux-right     'kcuf1'
+                                               
+		bsd-page-down  'kN'    linux-page-down 'knp'
+		bsd-page-up    'kP'    linux-page-up   'kpp'
+	)
+
+	# detect if os is BSD since Linux and BSD use 
+	# different key names in terminfo
+	#
+	local os=bsd
+
+	tput civis >/dev/null 2>&1 && os=linux
+
+
+	# use tput te extract escape sequence for 
+	# keys we will use in zle
+	#
+	local key
+	local key_code
+	typeset -A seq
+
+	for key in ${(M)${(k)key_name}:#${os}-*}; do
+		key_code=${"$(tput ${key_name[$key]} | sed -n l)"[1,-2]}
+		seq[${key#*-}]=${key_code}
+	done
+
+	#
+	# create new EMPTY keymap
+	#
+	bindkey -N $key_map
+
+	# menu movement keys
+	#
+	bindkey -M $key_map "[A"            __zzle_key_up             # UP
+	bindkey -M $key_map "[B"            __zzle_key_down           # DOWN
+
+	bindkey -M $key_map "k"               __zzle_key_up             # k
+	bindkey -M $key_map "j"               __zzle_key_down           # j
+
+	# menu movement keys
+	#
+	bindkey -M $key_map "$seq[up]"        __zzle_key_up             # UP
+	bindkey -M $key_map "$seq[down]"      __zzle_key_down           # DOWN
+	bindkey -M $key_map "$seq[home]"      __zzle_key_home           # HOME
+	bindkey -M $key_map "$seq[end]"       __zzle_key_end            # END
+	bindkey -M $key_map "$seq[page-up]"   __zzle_key_page_up        # PgUp
+	bindkey -M $key_map "$seq[page-down]" __zzle_key_page_down      # PgDown
+
+	# <ENTER> and <SPACE> are selection keys
+	#
+	#  CTRL+A select ALL
+	#  CTRL+N select NONE
+	#  CTRL+I invert selection
+	#
+	bindkey -M $key_map ""    __zzle_key_CTRL_A                   # CTRL+A
+	bindkey -M $key_map ""    __zzle_key_CTRL_N                   # CTRL+U
+	bindkey -M $key_map "^I"    __zzle_key_CTRL_I                   # CTRL+I
+
+	bindkey -M $key_map ""    __zzle_key_enter                    # <ENTER>
+	bindkey -M $key_map ""    __zzle_key_enter                    # <ENTER>
+	bindkey -M $key_map " "     __zzle_key_space                    # <SPACE>
+
+	#  2 x escape      - quit selection
+	#  CTRL+C          - quit selection 
+	#  CTRL+O          - accept selection
+	#
+	bindkey -M $key_map ""    __zzle_key_accept                   # CTRL+O
+	bindkey -M $key_map ""    __zzle_key_quit                     # CTRL+C
+	bindkey -M $key_map ""  __zzle_key_quit                     # 2 x escape
+}
+
+__zzle_load_widgets(){
+
+	###################################
+	# define functions as zle widgets
+	#
+	zle -N __zzle_key_up
+	zle -N __zzle_key_down
+	zle -N __zzle_key_home
+	zle -N __zzle_key_end
+	zle -N __zzle_key_page_up
+	zle -N __zzle_key_page_down
+
+	zle -N __zzle_key_space
+	zle -N __zzle_key_enter
+
+	zle -N __zzle_key_CTRL_A
+	zle -N __zzle_key_CTRL_N
+	zle -N __zzle_key_CTRL_I
+
+	zle -N __zzle_key_accept
+	zle -N __zzle_key_quit
+	zle -N __zzle_key_break
+
+	zle -N __zzle_vared_init
+	zle -N __zzle_vared_finish
+}
+
+
+#
+# zle widgets
+#
+__zzle_key_up(){
+	__zzle_key_code='UP'
+	zle accept-line
+}
+
+__zzle_key_down(){
+	__zzle_key_code='DOWN'
+	zle accept-line
+}
+
+__zzle_key_home(){
+	__zzle_key_code='HOME'
+	zle accept-line
+}
+
+__zzle_key_end(){
+	__zzle_key_code='END'
+	zle accept-line
+}
+
+__zzle_key_page_up(){
+	__zzle_key_code='PgUp'
+	zle accept-line
+}
+
+__zzle_key_page_down(){
+	__zzle_key_code='PgDown'
+	zle accept-line
+}
+
+
+__zzle_key_space(){
+	__zzle_key_code='SPACE'
+	zle accept-line
+}
+
+__zzle_key_enter(){
+	__zzle_key_code='ENTER'
+	zle accept-line
+}
+
+
+__zzle_key_CTRL_X(){
+	__zzle_key_code='CTRL_X'
+	zle accept-line
+}
+
+__zzle_key_CTRL_A(){
+	__zzle_key_code='CTRL_A'
+	zle accept-line
+}
+
+__zzle_key_CTRL_N(){
+	__zzle_key_code='CTRL_N'
+	zle accept-line
+}
+
+__zzle_key_CTRL_I(){
+	__zzle_key_code='CTRL_I'
+	zle accept-line
+}
+
+__zzle_key_accept(){
+	__zzle_key_code='ACCEPT'
+	zle accept-line
+}
+
+__zzle_key_quit(){
+	__zzle_key_code='QUIT'
+	zle accept-line
+}
+
+__zzle_key_escape(){
+	__zzle_key_code='ESCAPE'
+	zle accept-line
+}
+
+__zzle_key_break(){
+	__zzle_key_code='BREAK'
+	zle accept-line
+}
+
+
+__zzle_vared_init(){
+	# stop terminal from sending INT
+	# signal when CTRL+C is pressed
+	#
+	zterm intr off
+
+	__zzle_key_code=''
+}
+
+__zzle_vared_finish(){
+	# reenable terminal to send INT
+	# signal when CTRL+C is pressed
+	#
+	zterm intr restore
+}
+
+
+############################
+# parse arguments
+# 
+parse_arguments(){
+
+	# -E  allows options even after arguments
+	# -D  remove options from parameter list
+	# -A  put options into "hash" array, option
+	#     as key and option argument as value
+	#
+	# +   option can be given multiple times
+	# :   argument to option is mandatory
+	# ::  argument to option is optional
+	#
+	# :-  arguments are added to same array element as option.
+	#     following argument list:
+	#
+	#        -a one -a "" -a "two three"
+	#
+	#     would produced following array:
+	#
+	#        a[1] = "-aone"
+	#        a[2] = "-a"
+	#        a[3] = "-atwo three"
+	#
+	#     If "-" is not given, option and its argument are put
+	#     into array as separate items, thus above example
+	#     would produce following array:
+	#
+	#       a[1] = "-a"
+	#       a[2] = "one"
+	#       a[3] = "-a"
+	#       a[4] = ""
+	#       a[5] = "-a"
+	#       a[6] = "two three"
+	#
+
+	########################################
+	# options
+	#   -t test (dry run)
+	#
+	local commands=(help info tag backup restore list chroot mount test delete)
+	local ARGS TREE_LEVEL
+	
+	BLS_TEST=0
+	BLS_TREE_LEVEL=3
+
+	zparseopts -E -D -A ARGS t L:=TREE_LEVEL
+
+
+	if [[ -z "$1" ]]; then
+		BLS_COMMAND=help
+		BLS_ARGS=()
+	else
+ 		local cmd=(${(M)commands:#${1}*})
+
+		[[ $#cmd -eq 0 ]] && BLS_COMMAND="help"
+		[[ $#cmd -eq 1 ]] && BLS_COMMAND="$cmd"
+		[[ $#cmd -gt 1 ]] && BLS_COMMAND="help"
+
+		shift
+		BLS_ARGS=("$@")
+	fi
+
+	[[ ${+ARGS[-t]} -eq 1 ]] && BLS_TEST=1
+	[[ ${+ARGS[-L]} -eq 1 ]] && BLS_TREE_LEVEL=$TREE_LEVEL[2]
+
+	[[ $BLS_TREE_LEVEL =~ '^[0-9]+$' ]] || BLS_TREE_LEVEL=3
+}
+
+zfm_init

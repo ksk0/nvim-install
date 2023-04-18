@@ -1,0 +1,70 @@
+#!/usr/bin/zsh
+
+NEOVIM_DOWNLOAD_URL="https://github.com/neovim/neovim/releases/latest/download"
+
+install_neovim(){
+	download_deb_pkg
+
+ 	register_neovim_app nvim vi  N
+ 	register_neovim_app nvim vim Y
+
+	echo
+}
+
+download_appimage(){
+	local app=nvim.appimage
+	local url="$NEOVIM_DOWNLOAD_URL/$app"
+	# local dest=/usr/local/bin
+	local dest=/opt/nvim
+	local mode='oug+rx'
+
+	install_deb_package libfuse2
+	install_deb_package curl
+
+	local prog=$dest/nvim.appimage
+
+	[[ -d $dest ]] || sudo mkdir $dest && sudo chmod 755 $dest
+	[[ -f $prog ]] && sudo rm $prog
+
+	alert_msg "Downloading" "neovim appImage"
+	sudo curl -fL -o $prog $url
+	echo
+
+	alert_msg "Installing" "neovim appImage"
+	sudo chmod $mode $prog
+	sudo ln -s $prog /usr/local/bin/nvim 
+}
+
+download_deb_pkg(){
+	local url="$NEOVIM_DOWNLOAD_URL/nvim-linux64.deb"
+	local dest=/tmp
+
+	install_pkg system curl
+
+	local pkg=$dest/nvim-linux64.deb
+
+	alert_msg "Downloading" "neovim deb package"
+	echo
+	sudo curl -fL -o $pkg $url
+	echo
+
+	local inst_version=$(dpkg -l neovim 2>/dev/null | grep '^i' | awk '{print $3}')
+	local repo_version=$(apt show $pkg 2>/dev/null | grep '^Version:' | sed -e 's/Version: //')
+
+	
+	if [[ $inst_version = $repo_version ]]; then
+		alert_box --expand "Newest version of ${r}neovim${y} already installed!"
+		count_action success system neovim kept
+		return
+	fi
+
+	alert_msg "Installing" "neovim deb package"
+
+	echo
+	sudo apt install $pkg
+	local ret_val=$?
+
+	count_action $ret_val system neovim install
+
+	return $ret_val
+}

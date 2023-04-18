@@ -1,0 +1,11 @@
+#!/usr/bin/zsh
+
+__LUAROCKS_MIN=3.0
+
+system_pkg_install_lua(){
+	zpackage system install \
+		luarocks/$__LUAROCKS_MIN \
+		gcc make cmake build-essential || return 1
+
+	return 0
+}

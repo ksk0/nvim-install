@@ -1,0 +1,95 @@
+#!/usr/bin/zsh
+
+__CARGO_HOME=$__NVIM_BRICKS/cargo
+__CARGO_BIN=$__CARGO_HOME/bin
+
+
+
+#############################################
+# GARBAGE
+#
+rust_pkg_install_ORG(){
+	local package=$1
+
+	install_rust
+
+	alert_msg "Checking [rust]" "$package"
+
+	local has_pkg=$(cargo install --list | grep "^${package##*::} ")
+
+	if [[ -z $has_pkg ]]; then
+		clear_screen 4
+
+		alert_msg "Installing [cargo]" "${package##*::}"
+
+		echo
+		cargo install ${package##*::}
+
+		count_action $? cargo $package install
+		echo
+	else
+		local local_version=$(echo $has_pkg | awk '{print $NF}' | sed -e 's/:$//' -e 's/^v//')
+		local repo_version=$(cargo search -q ${package##*::} | grep "^${package##*::} " | sed -e 's/^.*= "//' -e 's/".*//')
+
+		clear_screen 4
+
+		if [[ $local_version != $repo_version ]]; then
+			alert_msg "Upgrading [cargo]" "${package##*::}"
+
+			echo
+			cargo install ${package##*::}
+
+			count_action $? cargo $package upgrade
+			echo
+		else
+			count_action success cargo $package kept
+		fi
+ fi
+
+	# warning: be sure to add `/home/koske/.local/share/nvim/cargo/bin` to your PATH to be able to run the installed binaries
+}
+
+
+#############################################
+# rust packages functions
+#
+rust_pkg_setup(){
+	[[ ${+__RUST_SETUP} -eq 1 ]] && return $__RUST_SETUP
+
+	__RUST_SETUP=1
+
+	zpackage system install rust || return 1
+
+	export CARGO_HOME=$__CARGO_HOME
+
+	__RUST_SETUP=0
+
+	return 0
+}
+
+rust_pkg_version(){
+	local package=$1
+	local vtype=$2
+
+	if [[ $vtype = "installed" ]]; then
+		cargo install --list |
+			grep "^${package##*::} " |
+			awk '{print $NF}' |
+			sed -e 's/:$//' -e 's/^v//'
+	
+	else
+		cargo search -q ${package##*::} |
+			grep "^${package##*::} " |
+			sed -e 's/^.*= "//' -e 's/".*//'
+		
+	fi
+}
+
+rust_pkg_doinstall(){
+	local package=$1
+
+	cargo install ${package##*::}
+
+	# warning: be sure to add `/home/koske/.local/share/nvim/cargo/bin` to your PATH to be able to run the installed binaries
+}
+
