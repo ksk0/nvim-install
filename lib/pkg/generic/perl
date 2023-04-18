@@ -66,17 +66,20 @@ perl_pkg_setup(){
 	[[ ${+__PERL_SETUP} -eq 1 ]] && return $__PERL_SETUP
 
 	__PERL_SETUP=1
-	zpackage system install perl || return 1
+
+	pkg_create_modules_dir || return 1
+	zpackage system install perl-module || return 1
 
 	local system_pkg=(${@:#*::*})
 	local perl_pkg=(${(M)@:#*::*})
 
-	# install_pkg system $system_pkg || __PERL_SETUP=1
-	zpackage perl install App::cpanminus $perl_pkg || return 1
-
 	__PERL_SETUP=0
 
-	return 0
+	zpackage perl install App::cpanminus $perl_pkg
+
+	__PERL_SETUP=$?
+
+	return $__PERL_SETUP
 }
 
 perl_pkg_version(){

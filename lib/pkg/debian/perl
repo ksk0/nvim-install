@@ -1,8 +1,7 @@
 #!/usr/bin/zsh
 
-system_pkg_doinstall_perl (){
-	system_pkg_doinstall perl || return 1
-	zpackage system install cpanminus make gcc || return 1
+system_pkg_install_perl_module (){
+	zpackage system install perl cpanminus make gcc || return 1
 
 	return 0
 }

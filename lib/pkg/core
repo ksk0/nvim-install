@@ -7,7 +7,7 @@ SYSTEM_UPGRADED=0
 INSTALLED_PACKAGES=()
 FAILED_PACKAGES=()
 AUTO_REMOVE_PKGS=""
-PACKAGE_LIST=$SCRIPT_DIR/lib/pkg/list
+PACKAGE_LIST=$SCRIPT_DIR/packages
 
 __NVIM_SHARE=$HOME/.local/share/nvim
 __NVIM_BRICKS=$__NVIM_SHARE/bricks
@@ -15,6 +15,9 @@ __NVIM_BRICKS=$__NVIM_SHARE/bricks
 typeset -gA __INSTALLED_PKGS
 typeset -gA __FAILED_PKGS
 typeset -gA MULTY_VERSION_PACKAGE
+
+# __REQUIRED_MODULES=(python node rust)
+__REQUIRED_MODULES=(python)
 
 
 ###############################################################################
@@ -122,6 +125,7 @@ zpackage(){
 	#    version
 	#    count
 	#    provides
+	#    doinstall
 	#    
 	#  When callling specific function, all arguments will be "transfarred"
 	#  to the function in single run. There will be no looping through
@@ -160,6 +164,7 @@ zpackage(){
 		version)   __repetitive=0;;
 		count)     __repetitive=0;;
 		provides)  __repetitive=0;;
+		doinstall) __repetitive=0;;
 	esac
 
 	for __package in $__args; do
@@ -173,6 +178,7 @@ zpackage(){
 			version)   __arguments=("$@");;
 			count)     __arguments=("$@");;
 			provides)  __arguments=("$@");;
+			doinstall) __arguments=("$@");;
 			*)         __arguments=($__package);;
 		esac
 
@@ -188,6 +194,7 @@ zpackage(){
 		# if yes, execute it
 		#
 		if typeset -f $__package_cmd >/dev/null; then
+			# echo $__package_cmd $__arguments || return 1
 			$__package_cmd $__arguments || return 1
 			[[ $__repetitive -eq 0 ]]   && return 0  # exit if single instance
 
@@ -198,6 +205,7 @@ zpackage(){
 		# if yes, execute it
 		#
 		if typeset -f $__module_cmd >/dev/null; then
+			# echo $__module_cmd $__arguments || return 1
 			$__module_cmd $__arguments || return 1
 			[[ $__repetitive -eq 0 ]]  && return 0  # exit if single instance
 
@@ -208,6 +216,7 @@ zpackage(){
 		# if yes, execute it
 		#
 		if typeset -f $__core_cmd >/dev/null; then
+			# echo $__core_cmd $__module $__arguments || return 1
 			$__core_cmd $__module $__arguments || return 1
 			[[ $__repetitive -eq 0 ]] && return 0  # exit if single instance
 
@@ -219,33 +228,171 @@ zpackage(){
 }
 
 
-pkg_select_group(){
 
-	alert_msg "Selecting a group of packages"
+############################
+# core function: install
+#
+pkg_install(){
+	local module=$1; shift
+	local pkg=$1; shift
+	local package=${pkg%%/*}
+	local __todo__
 
-	local pkg item
+	if ! zpackage $module setup; then
+		zpackage $module count fail $module $package "$module not set up"
+		return 1
+	fi
 
-	load_package_list
+	zpackage $module action $pkg __todo__
 
-	local req_pkgs=(python node rust)
-	local conf_pkgs=(${${(k)REQUIRED_PACKAGES}:#system})
+	echo "TODO:$__todo__<"
 
-	req_pkgs=(${req_pkgs:*conf_pkgs})
+	if [[ $__todo__ = keep ]] then
+		zpackage $module count success $module $pkg kept
+		return 0
+	elif [[ $__todo__ = skipp ]] then
+		zpackage $module count fail $module $pkg skipped
+		return 1
+	elif [[ $__todo__ = missing ]] then
+		zpackage $module count fail $module $pkg missing
+		return 1
+	elif [[ ${__todo__%%:*} = old ]] then
+		local parts=${(s.:.)__todo__}
+		zpackage $module count fail $module $pkg "$parts[2] $parts[3]"
+		return 1
+	fi
 
-	local -U pkgs=($req_pkgs)
-	pkgs+=(${${(k)REQUIRED_PACKAGES}:#system})
+	local action=${__todo__%%:*}
+	local actioning
 
+	if [[ $action = install ]]; then
+		actioning="Installing"
+	else
+		actioning="Updating"
+	fi
+
+	pkg=${__todo__#*:}
+
+	alert_msg "$actioning [$module]" "${pkg%/*}"
+	echo
+
+	zpackage $module preinstall $pkg
+
+	local width=$(tput cols)
+
+	[[ $width -gt 80 ]] && stty cols 80
+
+	zpackage $module doinstall  $pkg $action
+	local result=$?
+
+	[[ $width -gt 80 ]] && stty cols $width
+
+
+	zpackage $module count $result $module $pkg $action
+	zpackage $module postinstall $pkg
+
+	return $result
+}
+
+
+###############################################################################
+# package(s) and group selection/definition
+#
+pkg_packages_load(){
+	alert_msg "${y}Collecting packages to be installed:"
+	echo
+
+	typeset -gA MODULE_PACKAGES
+
+	MODULE_PACKAGES=("${(@f)$(
+		cat $PACKAGE_LIST |
+
+		sed -E \
+			-e 's/#.*//' \
+			-e 's/^\s+//' \
+			-e 's/\s+$//' \
+			-e 's/\s+/ /' \
+			-e 's/\[\s+/\[/' \
+			-e 's/\s+\]/\]/' |
+
+		grep -v '^$'|
+
+		awk '
+			function print_group(){
+				if (packages != ""){
+					print group
+					print(substr(packages,2))
+				}
+			}
+
+			/^\[[^]]+\]$/{
+				if (group != ""){
+					print_group()
+				}
+
+				sub(/\[/,"",$0)
+				sub(/\]/,"",$0)
+
+				group = $0
+				packages=""
+				next
+			}
+
+			{packages = packages " " $0}
+
+			END{
+				print_group()
+			}
+		'
+	)}")
+
+	local -U system_pkgs=(${=MODULE_PACKAGES[system]} ${=MODULE_PACKAGES[$OS]})
+
+	MODULE_PACKAGES[system]=$system_pkgs
+
+	unset "MODULE_PACKAGES[$OS]"
+
+	clear_screen 4
+}
+
+pkg_packages_select(){
+	pkg_packages_load
+
+	local -U all_modules=(${${(k)MODULE_PACKAGES}:#system})
+	local -U req_modules=(${__REQUIRED_MODULES:*all_modules})
+
+	all_modules=($req_modules)
+	all_modules+=(${${(k)MODULE_PACKAGES}:#system})
+
+
+	#####################################################
+	# If any of the modules are prerequired
+	# then preselect them in the menu
+	#
 	local preselected=()
 
-	[[ -n $req_pkgs ]] && preselected=($(for i in {1..$#req_pkgs}; do echo $i; done))
+	if [[ -n $req_modules ]]; then
+		preselected=(
+			$(
+				for i in {1..$#req_modules}; do
+					echo $i;
+				done
+			)
+		)
+	fi
 
-	for i in {1..$#pkgs}; do
-		pkg=$pkgs[$i]
-		item="$pkg;$REQUIRED_PACKAGES[$pkg]"
+	#####################################################
+	# Create menu list
+	#
+	local modules=()
+	local module
 
-		[[ $#item -gt 64 ]] && item="${(r:60:)item} ..."
+	for module in $all_modules; do
+		item="$module;$MODULE_PACKAGES[$module]"
 
-		pkgs[$i]=$item
+		[[ $#item -gt 54 ]] && item="${(r:50:)item} ..."
+
+		modules+=("$item")
 	done
 
 	local selection=()
@@ -261,7 +408,7 @@ pkg_select_group(){
 
 	zmenu select selection\
 		--width 60 \
-		--header "Pkg;Modules" \
+		--header "Group;Packages" \
 		--selected-color "b" \
 		--selected "$preselected" \
 		--multy \
@@ -271,80 +418,17 @@ pkg_select_group(){
 		--spaces "1 2 2" \
 		--no-bottom-line \
 		--prompt "$menu_prompt" \
-		$pkgs
+		$modules || {echo; exit}
 
 	echo
 
-	[[ -z $selection ]] && exit
-
-	typeset -gA SELECTED_GROUPS
+	typeset -gA SELECTED_MODULES
 
 	for i in $selection; do
-		SELECTED_GROUPS[${pkgs[$i]%;*}]=1
+		SELECTED_MODULES[${modules[$i]%;*}]=1
 	done
 
-	echo ${(kv)SELECTED_GROUPS}
-}
-
-############################
-# core function: install
-#
-pkg_install(){
-	local module=$1; shift
-	local pkg=$1; shift
-	local __todo__
-
-	if ! zpackage $module setup; then
-		zpackage $module count fail lua $package "$module not set up"
-		return 1
-	fi
-
-	zpackage $module action $pkg __todo__
-
-	if [[ $__todo__ = keep ]] then
-		zpackage count success $module $pkg kept
-		return 0
-	elif [[ $__todo__ = skipp ]] then
-		zpackage count fail $module $pkg skipped
-		return 1
-	elif [[ $__todo__ = missing ]] then
-		zpackage count fail $module $pkg missing
-		return 1
-	elif [[ ${__todo__%%:*} = old ]] then
-		local parts=${(s.:.)__todo__}
-		zpackage count fail $module $pkg "$parts[2] $parts[3]"
-		return 1
-	fi
-
-	local action
-
-	if [[ ${__todo__%%:*} = install ]]; then
-		action="Installing"
-	else
-		action="Updating"
-	fi
-
-	pkg=${__todo__#*:}
-
-	alert_msg "$action [$module]" "${pkg%/*}"
-	echo
-
-	zpackage $module preinstall $pkg
-
-	local width=$(tput cols)
-
-	[[ $width -gt 80 ]] && stty cols 80
-
-	zpackage $module doinstall  $pkg $action
-	local result=$?
-
-	[[ $width -gt 80 ]] && stty cols $width
-
-
-	zpackage $module count $result $module $pkg install
-	zpackage $module postinstall $pkg
-
-	return $result
+	echo ${(kv)SELECTED_MODULES}
 }
 
 
@@ -623,7 +707,9 @@ pkg_version_normalize(){
 # core function: count
 #
 pkg_count(){
+	local module=$1; shift
 	local action=$1; shift
+
 
 	if [[ $action = success ]]; then
 		pkg_count_success $1 $2 $3
@@ -664,71 +750,14 @@ pkg_count_fails(){
 }
 
 
-pkg_create_share_dir(){
-	[[ -d $__NVIM_SHARE ]] || mkdir -p $__NVIM_SHARE
+pkg_create_local_dir(){
+	[[ -d $__NVIM_SHARE ]] || mkdir -p $__NVIM_SHARE || return 1
+
+	return 0
+} 
+
+pkg_create_modules_dir(){
+	[[ -d $__NVIM_BRICKS ]] || mkdir -p $__NVIM_BRICKS || return 1
+
+	return 0
 }
-
-pkg_create_bricks_dir(){
-	[[ -d $__NVIM_BRICKS ]] || mkdir -p $__NVIM_BRICKS
-}
-
-
-#############################################
-# main packaging proxy function
-#
-load_package_list(){
-	typeset -gA REQUIRED_PACKAGES
-
-	REQUIRED_PACKAGES=("${(@f)$(
-		cat $PACKAGE_LIST |
-
-		sed -E \
-			-e 's/#.*//' \
-			-e 's/^\s+//' \
-			-e 's/\s+$//' \
-			-e 's/\s+/ /' \
-			-e 's/\[\s+/\[/' \
-			-e 's/\s+\]/\]/' |
-
-		grep -v '^$'|
-
-		awk '
-			function print_group(){
-				if (packages != ""){
-					print group
-					print(substr(packages,2))
-				}
-			}
-
-			/^\[[^]]+\]$/{
-				if (group != ""){
-					print_group()
-				}
-
-				sub(/\[/,"",$0)
-				sub(/\]/,"",$0)
-
-				group = $0
-				packages=""
-				next
-			}
-
-			{packages = packages " " $0}
-
-			END{
-				print_group()
-			}
-		'
-	)}")
-
-	local -U system_pkgs=(${=REQUIRED_PACKAGES[system]} ${=REQUIRED_PACKAGES[$OS]})
-
-	REQUIRED_PACKAGES[system]=$system_pkgs
-
-	unset "REQUIRED_PACKAGES[$OS]"
-}
-
-#############################################
-# package version
-#
-

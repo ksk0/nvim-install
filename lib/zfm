@@ -440,7 +440,7 @@ zmenu(){
 	local zm_cmd=$1; shift
 
 	case $zm_cmd in
-		select) __zmenu_select "$@";;
+		select) __zmenu_select "$@"; return $?;;
 		print)  __zmenu_print  "$@";;
 		init)   __zmenu_init   "$@";;
 	esac
@@ -465,11 +465,14 @@ __zmenu_select(){
 	# call real selection function
 	#
 	__zmenu_exec_select "$@"
+	local retval=$?
 
 	# store result in variable given as first
 	# argument.
 	#
 	eval  "${__zmenu_selection_storage}=($__zmenu_selection)"
+
+	return $retval
 }
 
 __zmenu_print(){
@@ -1330,13 +1333,17 @@ __zmenu_exec_select(){
 
 	__zmenu_move_focus 0
 
-	[[ $key = QUIT ]] && zm_selected=()
 
 	zterm cursor position $zm_pos_zle 1
 	zterm echo restore
 	zterm cursor restore
 
+	local retval=0
+	[[ $key = QUIT ]] && retval=1 && zm_selected=()
+
 	__zmenu_selection=(${(@n)${(@k)zm_selected[(R)1]}})
+
+	return $retval
 }
 
 __zmenu_item_select(){
@@ -1941,7 +1948,7 @@ __zzle_vared_finish(){
 ############################
 # parse arguments
 # 
-parse_arguments(){
+parse_arguments_ZFM(){
 
 	# -E  allows options even after arguments
 	# -D  remove options from parameter list

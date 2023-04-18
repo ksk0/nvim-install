@@ -97,7 +97,7 @@ install_node_ORG(){
 			--title "${b}Select \"nodejs\" version to install:"\
 			--header "From;Source;Version" \
 			--prompt "$menu_prompt" \
-			$pkgs
+			$pkgs || exit
 
 		echo
 

@@ -74,7 +74,6 @@ exec_neovim(){
 }
 
 exec_packages(){
-	update_system
 	install_packages
 }
 
@@ -125,15 +124,15 @@ install_cliboard(){
 }
 
 install_packages(){
-	load_package_list
-	what_to_install
+	zpackage system packages-select
 
-	install_pkg system ${=REQUIRED_PACKAGES[system]}
+	local module
+	local MODULES=(system ${${(k)SELECTED_MODULES}:#system})
 
-	local pkg
+	echo MODULES: $MODULES
 
-	for pkg in ${(k)NEED_PKG[(R)1]}; do
-		install_pkg $pkg ${=REQUIRED_PACKAGES[$pkg]}
+	for module in $MODULES; do
+		zpackage $module install ${=MODULE_PACKAGES[$module]}
 	done
 }
 
@@ -141,12 +140,12 @@ what_to_install(){
 	local pkg item
 
 	local req_pkgs=(python node rust)
-	local conf_pkgs=(${${(k)REQUIRED_PACKAGES}:#system})
+	local conf_pkgs=(${${(k)MODULE_PACKAGES}:#system})
 
 	req_pkgs=(${req_pkgs:*conf_pkgs})
 
 	local -U pkgs=($req_pkgs)
-	pkgs+=(${${(k)REQUIRED_PACKAGES}:#system})
+	pkgs+=(${${(k)MODULE_PACKAGES}:#system})
 
 	local preselected=()
 
@@ -154,7 +153,7 @@ what_to_install(){
 
 	for i in {1..$#pkgs}; do
 		pkg=$pkgs[$i]
-		item="$pkg;$REQUIRED_PACKAGES[$pkg]"
+		item="$pkg;$MODULE_PACKAGES[$pkg]"
 
 		[[ $#item -gt 64 ]] && item="${(r:60:)item} ..."
 
@@ -644,10 +643,10 @@ show_notifications(){
 
 parse_arguments(){
 	local commands=(all neovim packages cliboard)
-	local cmd=(${(M)commands:#${1}*}) 
+	local cmd=(${(M)commands:#${1}*})
 
-	[[ $#cmd -eq 0 ]] && SCRIPT_COMMAND="exec_help"                         
-	[[ $#cmd -eq 1 ]] && SCRIPT_COMMAND="exec_$cmd"                         
+	[[ $#cmd -eq 0 ]] && SCRIPT_COMMAND="exec_help"
+	[[ $#cmd -eq 1 ]] && SCRIPT_COMMAND="exec_$cmd"
 	[[ $#cmd -gt 1 ]] && SCRIPT_COMMAND="exec_help"
 
 	shift 2>/dev/null
@@ -655,21 +654,9 @@ parse_arguments(){
 	SCRIPT_ARGS=("$@")
 }
 
-# zpackage system select-group
-zpackage system install curl par
-zpackage system install nodejs #/16.0
-
-exit
-
-init_colors
-
 check_if_root
-check_linux_flavour
 
 parse_arguments $@
-
-# install_node
-# exit
 
 $SCRIPT_COMMAND "${SCRIPT_ARGS[@]}"
 

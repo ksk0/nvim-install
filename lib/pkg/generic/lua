@@ -76,10 +76,14 @@ lua_pkg_install_ORG(){
 lua_pkg_setup(){
 	[[ ${+__LUA_SETUP} -eq 1 ]] && return $__LUA_SETUP
 
-	__LUA_SETUP=0
-	zpackage system install lua || __LUA_SETUP=1
+	__LUA_SETUP=1
 
-	return $__LUA_SETUP
+	pkg_create_modules_dir || return 1
+	zpackage system install lua-module || return 1
+
+	__LUA_SETUP=0
+
+	return 0
 }
 
 lua_pkg_version(){

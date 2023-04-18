@@ -12,7 +12,6 @@ python_pkg_install_ORG(){
 	zpackage python setup || return 1
 
 	python_package action $pkg todo
-	# echo "TODO:$todo $pkg"
 
 	if [[ $todo = keep ]] then
 		count_action success python $pkg kept
@@ -246,17 +245,24 @@ python_pkg_check_2(){
 # python packages functions
 #
 python_pkg_setup(){
+	return 1
+
 	[[ ${+__PYTHON_SETUP} -eq 1 ]] && return $__PYTHON_SETUP
 
 	__PYTHON_SETUP=1
 
+	pkg_create_modules_dir || return 1
 	zpackage system install python || return 1
-	zpackage python install venv   || return 1
-	zpackage python install pip    || return 1
+
+	python_pkg_install_venv        || return 1
 
 	__PYTHON_SETUP=0
 
-	return 0
+	zpackage python install pip 
+
+	__PYTHON_SETUP=$?
+
+	return $__PYTHON_SETUP
 }
 
 python_pkg_version(){
@@ -288,26 +294,33 @@ python_pkg_version(){
 	cd $tmp_dir
 	pip3 download $pkg >/dev/null 2>&1
 
-	local package=$(ls -1)
+	local package=$(ls -1 | grep "^$pkg" | head -1)
 
 	[[ -z $package ]] && return
 
-	repo_version=$(
+	if [[ $package =~ '.tar.gz$' ]]; then
+		tar --wildcards -O -zxf $package '*/PKG-INFO' |
+			grep '^Version:' |
+			awk '{print $2; exit}'
+	elif [[ $package =~ '.whl' ]]; then
 		unzip -c $package '*/METADATA' |
-		grep '^Version: ' |
-		awk '{print $2}'
-	)
+			grep '^Version: ' |
+			awk '{print $2; exit}'
+	fi
+
 
 	cd $cwd
 	rm -rf $tmp_dir
-
-	echo $repo_version
 }
 
 python_pkg_doinstall(){
 	local package=$1
+	local action=$2
+	local upgrade
 
-	pip3 install $package
+	[[ $action = update ]] && upgrade="--upgrade"
+
+	pip3 install $upgrade $package
 	return $?
 }
 
@@ -317,24 +330,27 @@ python_pkg_install_venv(){
 	local venv_lib=$__PYTHON_HOME/lib/python3
 	local activate=$__PYTHON_HOME/bin/activate
 
-	[[ -f $activate ]] && return 0
+	if  [[ ! -f $activate ]]; then
+		alert_msg "Installing" "python virtual env"
 
-	alert_msg "Installing" "python virtual env"
+		python3 -m venv \
+		--system-site-packages $venv_path #\
+		#>/dev/null 2>&1
 
-	python3 -m venv \
-	--system-site-packages $venv_path \
-	>/dev/null 2>&1 || return 1
+		local retval=$?
 
-	local version=$(
-		grep -E '^version\s*=\s*' $venv_cfg |
-		sed -E -e 's/^version\s*=\s*//' |
-		awk -F. '{print $1 "." $2}'
-	)
+		local version=$(
+			grep -E '^version\s*=\s*' $venv_cfg |
+			sed -E -e 's/^version\s*=\s*//' |
+			awk -F. '{print $1 "." $2}'
+		)
 
-	[[ -L $venv_lib ]] || ln -s python${version} $venv_lib
+		[[ -L $venv_lib ]] || ln -s python${version} $venv_lib
+
+		clear_screen 4
+	fi
+
 	[[ -z $VIRTUAL_ENV ]] && source $venv_path/bin/activate
-
-	clear_screen 4
 
 	return 0
 }

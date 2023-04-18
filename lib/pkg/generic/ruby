@@ -61,7 +61,9 @@ ruby_pkg_setup(){
 	[[ ${+__RUBY_SETUP} -eq 1 ]] && return $__RUBY_SETUP
 
 	__RUBY_SETUP=1
-	zpackage system install ruby || return 1
+
+	pkg_create_modules_dir || return 1
+	zpackage system install ruby-module || return 1
 
 	__RUBY_SETUP=0
 

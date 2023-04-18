@@ -14,7 +14,7 @@
 [debian]
 [system]
    unzip tar gzip wget curl git
-   lazygit
+   # lazygit
 
 [python]
    pynvim
