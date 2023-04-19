@@ -5,61 +5,6 @@ __PERL_LIB=$__PERL_HOME/lib/perl5
 
 
 #############################################
-# GARBAGE
-#
-perl_pkg_install_ORG(){
-	local package=$1
-
-	install_perl
-
-	if [[ $__PERL_SETUP -eq 0 ]]; then
-		count_action fail perl $package "perl not installed"
-		return 1
-	fi
-
-	alert_msg "Checking [perl]" "$package"
-
-	local has_perl5=$([[ -d ~/perl5 ]] && echo "YES")
-	local has_pkg=$(perl -I $__PERL_LIB -e "use $package" 2>&1)
-
-	if [[ -n $has_pkg ]]; then
-		clear_screen 4
-
-		alert_msg "Installing [perl]" "$package"
-
-		echo
-		cpanm --local-lib=$__PERL_HOME -n $package
-
-		count_action $? perl $package install
-		echo
-	else
-		local tar_pkg=${package//::/-}
-		local local_version=$(perl -I $__PERL_LIB -M${package} -e 'print $'${package}'::VERSION . "\n";')
-		local repo_version=$(cpanm --info $package | grep "/${tar_pkg}.*tar.gz" | sed -e "s:.*/${tar_pkg}-::" -e 's:\.tar\.gz$::')
-
-		clear_screen 4
-
-		if [[ $local_version != $repo_version ]]; then
-			alert_msg "Upgrading [perl]" "$package"
-
-			echo
-			cpanm --local-lib=$__PERL_HOME -n $package
-
-			count_action $? perl $package upgrade
-			echo
-		else
-			count_action success perl $package kept
-		fi
-	fi
-
-	# if "perl5" directory has been created
-	# delete it
-	#
-	[[ -z $has_perl5 ]] && [[ -d ~/perl5 ]] && rm -rf ~/perl5
-}
-
-
-#############################################
 # node packages functions
 #
 perl_pkg_setup(){

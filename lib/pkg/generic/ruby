@@ -5,56 +5,6 @@ __RUBY_BIN=$__RUBY_HOME/bin
 
 
 #############################################
-# GARBAGE
-#
-ruby_pkg_install_ORG(){
-	local package=$1
-
-	install_ruby
-
-	if [[ $__RUBY_SETUP -eq 0 ]]; then
-		count_action fail ruby $package "ruby not installed"
-		return 1
-	fi
-
-	alert_msg "Checking [ruby]" "$package"
-
-	local has_pkg=$(gem info $package | grep "^$package ")
-
-	[[ -d $__RUBY_BIN ]] || mkdir -p $__RUBY_BIN
-
-	if [[ -z $has_pkg ]]; then
-		clear_screen 4
-
-		alert_msg "Installing [ruby]" "$package"
-
-		echo
-		gem install --user-install -n $__RUBY_BIN $package
-
-		count_action $? ruby $package install
-		echo
-	else
-		local local_version=$(echo $has_pkg | sed -e "s/^${package} (//" -e 's/)//')
-		local repo_version=$(gem info $package --remote | grep "^$package " | sed -e "s/^${package} (//" -e 's/)//')
-
-		clear_screen 4
-
-		if [[ $local_version != $repo_version ]]; then
-			alert_msg "Upgrading [ruby]" "$package"
-
-			echo
-			gem install --user-install -n $__RUBY_BIN $package
-
-			count_action $? ruby $package upgrade
-			echo
-		else
-			count_action success ruby $package kept
-		fi
-	fi
-}
-
-
-#############################################
 # ruby packages functions
 #
 ruby_pkg_setup(){

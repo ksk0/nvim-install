@@ -1,8 +1,5 @@
 #!/usr/bin/zsh
 
-#############################################
-# node packages functions
-#
 system_pkg_install_nodejs_module(){
 	zpackage system install nodejs npm
 
