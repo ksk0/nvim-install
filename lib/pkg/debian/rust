@@ -1,6 +1,6 @@
 #!/usr/bin/zsh
 
-system_pkg_install_rust(){
+system_pkg_install_rust_module(){
 	zpackage system install cargo make
 
 	return $?

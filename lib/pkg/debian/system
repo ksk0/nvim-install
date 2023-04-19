@@ -1,6 +1,6 @@
 #!/usr/bin/zsh
 
-__CORE_PACKAGES_OS=()
+__CORE_PACKAGES_OS=(par)
 
 system_pkg_snapshot(){
 	apt list --installed 2>/dev/null |
@@ -124,8 +124,14 @@ system_pkg_upgrade(){
 		echo
 		alert_box --expand "No package(s) need upgrade !!!"
 
+		return 0
+
 	else
-		alert_box --expand "Your system needs upgrade !!!"
+		system_pkg_upgrade_report \
+			"There are package(s) that need upgrade:" \
+			"" "${(@)upgradable}"
+
+		# alert_box --expand "Your system needs upgrade !!!"
 
 		if yesno_question "Do you want to upgrades the system [y/N]:" N; then
 			alert_msg "${y}Upgrading system packages ..."
@@ -142,13 +148,18 @@ system_pkg_upgrade(){
 	fi
 
 	if [[ -n $keptback ]]; then
-		{
-			echo "Following packages are kept back:"
-			echo
-			echo ${(j:\n:)${(@)keptback/#/   ${n}}}${y}
-			echo
-			echo "They have to be installed manualy!"
-		} | sed -e 's/^/   /' | alert_box --expand --left
+		# {
+		# 	echo "Following packages are kept back:"
+		# 	echo
+		# 	echo ${(j:\n:)${(@)keptback/#/   ${n}}}${y}
+		# 	echo
+		# 	echo "They have to be installed manualy!"
+		# } | sed -e 's/^/   /' | alert_box --expand --left
+
+		system_pkg_upgrade_report \
+			"Following packages are kept back:" \
+			"They have to be installed manualy!" \
+			"${(@)keptback}"
 
 		if yesno_question "Do you want to install kept back packages [y/N]:" N; then
 			alert_msg "${y}Installing kept back packages ..."
@@ -164,15 +175,21 @@ system_pkg_upgrade(){
 	fi
 
 	if [[ -n $autoremove ]]; then
-		{
-			echo "Following packages can be removed, since they are not needed:"
-			echo
-			echo ${(j:\n:)${(@)autoremove/#/   ${n}}}
-			echo
-			echo "To remove them run:"
-			echo "   ${n}apt autoremove${y}"
-		} | sed -e 's/^/   /' | alert_box --expand --left
+	system_pkg_upgrade_report \
+		"Following packages can be removed, since they are not needed:" \
+		"To remove them run:\n   ${n}apt autoremove${y}" \
+		"${(@)autoremove}"
+
+		# {
+		# 	echo "Following packages can be removed, since they are not needed:"
+		# 	echo
+		# 	echo ${(j:\n:)${(@)autoremove/#/   ${n}}}
+		# 	echo
+		# 	echo "To remove them run:"
+		# 	echo "   ${n}apt autoremove${y}"
+		# } | sed -e 's/^/   /' | alert_box --expand --left
 	fi
+
 
 	if [[ $modified -eq 1 ]]; then
 		alert_box --expand "Run installation script again!"
@@ -182,6 +199,41 @@ system_pkg_upgrade(){
 	fi
 
 	return 0
+}
+
+system_pkg_upgrade_report(){
+	local header=$1; shift
+	local footer=$1; shift
+	local packages=("$@")
+
+	echo PACKAGES:  ${packages/#/\\n   }
+	echo
+
+	if [[ $#packages -le 10 ]]; then
+		package_list=("${(@)packages}")
+	else
+		local extra_pkgs=$(($#packages - 10))
+		package_list=("${(@)packages[1,10]}")
+		package_list+=("...")
+		package_list+=("${y}and $extra_pkgs more !!!${n}")
+	fi
+
+	local len=$#header
+
+	{
+		echo "$header"
+		echo ${(l:$len::-:)void}
+
+		# for package in $package_list; do
+		echo ${(j:\n:)${(@)package_list/#/${n}}}
+		# done
+
+		if [[ -n $footer ]]; then
+			echo
+			echo $footer
+		fi
+
+	}  | alert_box --left --offset 3 --expand
 }
 
 system_pkg_update(){

@@ -1,13 +1,9 @@
 #!/usr/bin/zsh
 
-MULTY_VERSION_PACKAGE[nodejs]="YES"
-
- __NODE_MIN_VERSION=18.0
-
 #############################################
 # node packages functions
 #
-system_pkg_doinstall_nodejs_module(){
+system_pkg_install_nodejs_module(){
 	zpackage system install nodejs npm
 
 	return $?
