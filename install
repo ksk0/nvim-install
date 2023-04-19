@@ -74,6 +74,7 @@ exec_neovim(){
 }
 
 exec_packages(){
+	echo "--- first row ---"
 	install_packages
 }
 
@@ -92,12 +93,10 @@ install_packages(){
 	local module
 	local MODULES=(system ${${(k)SELECTED_MODULES}:#system})
 	# local MODULES=(${${(k)SELECTED_MODULES}:#system})
-	# local MODULES=(ruby)
-
-
-	echo MODULES: $MODULES
+	local MODULES=(system)
 
 	for module in $MODULES; do
+		echo "-- before install --"
 		zpackage $module install ${=MODULE_PACKAGES[$module]}
 	done
 }

@@ -244,6 +244,7 @@ pkg_install(){
 		return 1
 	fi
 
+	echo "-- get action --"
 	zpackage $module action $pkg __todo__
 
 	if [[ $__todo__ = keep ]] then
@@ -356,7 +357,7 @@ pkg_packages_load(){
 
 	unset "MODULE_PACKAGES[$OS]"
 
-	clear_screen 4
+	clear_screen 5
 }
 
 pkg_packages_select(){
@@ -431,8 +432,6 @@ pkg_packages_select(){
 	for i in $selection; do
 		SELECTED_MODULES[${modules[$i]%;*}]=1
 	done
-
-	echo ${(kv)SELECTED_MODULES}
 }
 
 
@@ -479,7 +478,7 @@ pkg_action_single(){
 
 	eval "$store=$action"
 
-	clear_screen 4
+	clear_screen 5
 }
 
 pkg_action_multy(){
@@ -615,7 +614,7 @@ pkg_action_define(){
 		echo "Installed: $inst_version"
 		echo "Repo:      $repo_version"
 		echo "Need:      $need_version"
-	} >&2
+	} >/dev/null
 
 	if [[ -z inst_version ]] || [[ $inst_version -eq 0 ]]; then
 		if [[ -z $repo_version ]] || [[ $repo_version -eq 0 ]]; then
@@ -640,6 +639,8 @@ pkg_action_define(){
 	fi
 
 	echo $action
+
+	clear_screen 3 >/dev/null
 }
 
 

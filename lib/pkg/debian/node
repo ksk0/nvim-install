@@ -467,7 +467,6 @@ system_pkg_action_multy_nodejs(){
 	local pkg=$package/$from-$selected[3]
 
 	local action=$(
-		echo pkg_action_define $package $need_version $version $inst_version >&2
 		pkg_action_define $pkg $need_version $version $inst_version
 	)
 

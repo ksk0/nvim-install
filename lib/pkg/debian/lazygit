@@ -23,10 +23,12 @@ system_pkg_version_lazygit(){
 }
 
 system_pkg_doinstall_lazygit(){
-	local version=$(system_pkg_version_lazygit repo)
+	local version=$(system_pkg_version_lazygit lazygit repo)
 
 	url="https://github.com/jesseduffield/lazygit/releases/latest/download"
 	url="${url}/lazygit_${version}_Linux_x86_64.tar.gz"
+
+	echo URL: $url
 
 	(
 		cd /usr/local/bin

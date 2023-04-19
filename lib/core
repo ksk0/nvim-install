@@ -1,8 +1,5 @@
 #!/usr/bin/zsh
 
-__CORE_MARGINE=3
-__CORE_SHARE=$SCRIPT_DIR/.local/
-
 source $SCRIPT_DIR/lib/zfm
 
 
@@ -88,12 +85,15 @@ linux_flavour(){
 # messaging functions
 #
 clear_screen(){
-	return
 	local i
 
 	for i in {1..$1}; do
 		echo -n '[A[2K'
 	done
+
+	# echo -n "Press <ENTER>:"
+	# read a
+	# echo -n '[A[2K'
 }
 
 yesno_question(){
@@ -129,7 +129,7 @@ set_margine(){
 
 alert_msg(){
 	local width=80
-	local margine=$__CORE_MARGINE
+	local margine=${__CORE_MARGINE:-3}
 	local void
 
 	local ARGS MARGINE
