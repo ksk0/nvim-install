@@ -250,8 +250,7 @@ python_pkg_setup(){
 	__PYTHON_SETUP=1
 
 	pkg_create_modules_dir || return 1
-	zpackage system install python || return 1
-
+	zpackage system install python-module || return 1
 	python_pkg_install_venv        || return 1
 
 	__PYTHON_SETUP=0

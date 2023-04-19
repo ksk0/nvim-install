@@ -1,0 +1,7 @@
+#!/usr/bin/zsh
+
+system_pkg_install_neovim_app(){
+	zpackage system install neovim
+
+	return $?
+}

@@ -1,0 +1,108 @@
+#!/usr/bin/zsh
+
+
+install_python_DONE(){
+	setup_python python python-pip python-virtualenv # cmake
+}
+
+install_luarocks_DONE(){
+	setup_luarocks gcc make cmake lua51
+}
+
+install_ruby_DONE(){
+	setup_ruby make gcc
+}
+
+install_perl_DONE (){
+	setup_perl make gcc
+}
+
+install_node_DONE(){
+	setup_node
+}
+
+install_rust(){
+	setup_rust rust make
+}
+
+install_neovim_DONE(){
+	install_pkg system neovim
+
+ 	# register_neovim_app nvim vi  N
+ 	# register_neovim_app nvim vim Y
+}
+
+update_system_DONE(){
+	[[ $SYSTEM_UPGRADED -eq 1 ]] && return || SYSTEM_UPGRADED=1
+
+	cat <<-EOF | alert_box --expand
+		${n}Before installing/updating any packages system should
+		${n}be upgraded. On Arch system you should do this manually, but
+		${n}we can check if  any upgrade is needed.
+
+		If you choose to do the check, package database will be synced.
+	EOF
+
+	yesno_question "${y}Do you want to sync the package database [Y/n]:${n}" Y
+
+	[[ $? -eq 0 ]] && update_system_database
+
+	local upgradable=($(pacman -Qu | awk '{print $1}'))
+
+	if [[ -z $upgradable ]]; then
+		alert_box --expand "No package(s) needs upgrade !!!"
+
+		return
+	fi
+
+	{
+		echo "There are package(s) that needs upgrade:"
+		echo "-----------------------------------------"
+
+		for package in $upgradable; do
+			echo "${n}$package"
+			# local parts=("${(s:;:)package}")
+			# printf "${n}%-10s %-10s %-25s\n" $parts[1] $parts[2] $parts[3]
+		done
+
+	} | sed -e 's/^/   /' | alert_box --left --expand
+
+
+	echo
+	cat <<-EOF | alert_box --expand
+		Upgrade system manualy, and run install script again!
+	EOF
+
+	local keyring=${(M)upgradable:#archlinux-keyring}
+
+	if [[ -n $keyring ]]; then
+		echo "${y}run:${n}"
+		echo "  sudo pacman -Sy archlinux-keyring"
+		echo "  sudo pacman -Su"
+	else
+		echo "${y}run:${n}"
+		echo "  sudo pacman -Su"
+	fi 
+
+	echo
+	echo
+
+	exit
+}
+
+update_system_database_DONE(){
+	local width=$(tput cols)
+
+	alert_msg "Updating" "system package database"
+	echo
+
+	if [[ $width -gt 80 ]] then
+		stty cols 80
+	fi
+
+	sudo pacman -Sy
+
+	if [[ $width -gt 80 ]] then
+		stty cols $width
+	fi
+}

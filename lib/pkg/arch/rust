@@ -1,7 +1,7 @@
 #!/usr/bin/zsh
 
 system_pkg_install_rust(){
-	zpackage system install cargo make
+	zpackage system install rust make
 
 	return $?
 }

@@ -1,6 +1,16 @@
 #!/usr/bin/zsh
 
-sys_package_version(){
+__CORE_PACKAGES_OS=()
+
+system_pkg_snapshot_MISSING(){
+	return 
+
+	apt list --installed 2>/dev/null |
+		grep -v 'Listing...' |
+		awk -F'/' '{print $1}'
+}
+
+system_pkg_version(){
 	local pkg=$1
 	local vtype=$2
 
@@ -14,39 +24,28 @@ sys_package_version(){
 	esac
 }
 
+system_pkg_doinstall(){
+	local width=$(tput cols)
+	local result
 
-install_python(){
-	setup_python python python-pip python-virtualenv # cmake
+	if [[ $width -gt 80 ]] then
+		stty cols 80
+	fi
+
+	sudo pacman -S --noconfirm $1
+	result=$?
+
+	if [[ $width -gt 80 ]] then
+		stty cols $width
+	fi
+
+	return $result
 }
 
-install_luarocks(){
-	setup_luarocks gcc make cmake lua51
+system_pkg_uninstall_MISSING(){
 }
 
-install_ruby(){
-	setup_ruby make gcc
-}
-
-install_perl (){
-	setup_perl make gcc
-}
-
-install_node(){
-	setup_node
-}
-
-install_rust(){
-	setup_rust rust make
-}
-
-install_neovim(){
-	install_pkg system neovim
-
- 	# register_neovim_app nvim vi  N
- 	# register_neovim_app nvim vim Y
-}
-
-update_system(){
+system_pkg_upgrade(){
 	[[ $SYSTEM_UPGRADED -eq 1 ]] && return || SYSTEM_UPGRADED=1
 
 	cat <<-EOF | alert_box --expand
@@ -57,9 +56,9 @@ update_system(){
 		If you choose to do the check, package database will be synced.
 	EOF
 
-	yesno_question "${y}Do you want to sync the package database [Y/n]:${n}" Y
+	yesno_question "Do you want to sync the package database [Y/n]:" Y
 
-	[[ $? -eq 0 ]] && update_system_database
+	[[ $? -eq 0 ]] && system_pkg_update
 
 	local upgradable=($(pacman -Qu | awk '{print $1}'))
 
@@ -69,17 +68,28 @@ update_system(){
 		return
 	fi
 
+	local upgradable_list=()
+
+	echo NO PACKAGES:$#upgradable
+
+	if [[ $#upgradable -le 10 ]]; then
+		upgradable_list=("${(@)upgradable}")
+	else
+		local extra_pkgs=$(($#upgradable - 10))
+		upgradable_list=("${(@)upgradable[1,10]}")
+		upgradable_list+=("...")
+		upgradable_list+=("${y}and $extra_pkgs more !!!${n}")
+	fi
+
 	{
-		echo "There are package(s) that needs upgrade:"
+		echo "There are package(s) that need upgrade:"
 		echo "-----------------------------------------"
 
-		for package in $upgradable; do
+		for package in $upgradable_list; do
 			echo "${n}$package"
-			# local parts=("${(s:;:)package}")
-			# printf "${n}%-10s %-10s %-25s\n" $parts[1] $parts[2] $parts[3]
 		done
 
-	} | sed -e 's/^/   /' | alert_box --left --expand
+	}  | alert_box --left --offset 3 --expand
 
 
 	echo
@@ -104,7 +114,7 @@ update_system(){
 	exit
 }
 
-update_system_database(){
+system_pkg_update(){
 	local width=$(tput cols)
 
 	alert_msg "Updating" "system package database"
@@ -114,7 +124,12 @@ update_system_database(){
 		stty cols 80
 	fi
 
-	sudo pacman -Sy
+	sudo -v
+	echo
+
+	sudo pacman -Sy >/dev/null 2>&1&
+
+	zprogress wait $! "Downloading package list"
 
 	if [[ $width -gt 80 ]] then
 		stty cols $width

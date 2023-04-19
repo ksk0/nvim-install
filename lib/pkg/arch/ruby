@@ -1,7 +1,7 @@
 #!/usr/bin/zsh
 
 system_pkg_install_ruby_module(){
-	zpackage system install ruby ruby-dev make gcc
+	zpackage system install ruby make gcc
 
 	return $?
 }
