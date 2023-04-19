@@ -38,7 +38,7 @@ system_pkg_doinstall(){
 		stty cols 80
 	fi
 
-	sudo apt-get install --yes $1
+	sudo_cmd apt-get install --yes $1
 	result=$?
 
 	if [[ $width -gt 80 ]] then
@@ -66,10 +66,10 @@ system_pkg_uninstall(){
 		'
 	))
 
-	sudo apt-get --yes remove $pkg || return 1
+	sudo_cmd apt-get --yes remove $pkg || return 1
 
 	if [[ -n $autoremove ]]; then
-		 sudo apt-get --yes autoremove || return 1
+		 sudo_cmd apt-get --yes autoremove || return 1
 	fi
 
 	return 0
@@ -137,7 +137,7 @@ system_pkg_upgrade(){
 			alert_msg "${y}Upgrading system packages ..."
 			echo
 
-			sudo apt-get upgrade -qq --yes
+			sudo_cmd apt-get upgrade -qq --yes
 			echo
 
 			modified=1
@@ -165,7 +165,7 @@ system_pkg_upgrade(){
 			alert_msg "${y}Installing kept back packages ..."
 			echo
 
-			sudo apt-get install -qq --yes $keptback
+			sudo_cmd apt-get install -qq --yes $keptback
 			echo
 
 			modified=1
@@ -240,10 +240,9 @@ system_pkg_update(){
 	alert_msg "Updating" "system package list"
 	echo
 
-	sudo -v
-	echo
+	sudo_init || return 1
 
-	sudo apt-get -q update >/dev/null &
+	sudo_cmd apt-get -q update >/dev/null &
 
 	zprogress wait $! "Downloading package list"
 }

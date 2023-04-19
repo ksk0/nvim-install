@@ -32,7 +32,7 @@ system_pkg_doinstall(){
 		stty cols 80
 	fi
 
-	sudo pacman -S --noconfirm $1
+	sudo_cmd pacman -S --noconfirm $1
 	result=$?
 
 	if [[ $width -gt 80 ]] then
@@ -120,14 +120,13 @@ system_pkg_update(){
 	alert_msg "Updating" "system package database"
 	echo
 
+	sudo_init || 1
+
 	if [[ $width -gt 80 ]] then
 		stty cols 80
 	fi
 
-	sudo -v
-	echo
-
-	sudo pacman -Sy >/dev/null 2>&1&
+	sudo_cmd pacman -Sy >/dev/null 2>&1&
 
 	zprogress wait $! "Downloading package list"
 

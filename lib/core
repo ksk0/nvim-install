@@ -80,6 +80,51 @@ linux_flavour(){
 	exit 1
 }
 
+sudo_init(){
+	sudo -nv 2>/dev/null && return
+
+	echo
+	echo
+	echo
+	sudo -p '[2A[2K[sudo] password for %p: ' -v
+
+	local retval=$?
+
+	if [[ $retval -ne 0 ]]; then
+		clear_screen 3
+
+		{
+			echo
+			echo "   sudo: ${r}3 incorrect password attempts !!!${n}"
+			echo
+		} >&2
+	else
+		clear_screen 2
+	fi
+
+	return $retval
+}
+
+sudo_cmd(){
+	sudo_init || return 1
+
+	sudo "$@"
+	return $?
+}
+
+sudo_global(){
+	if [[ $GLOBAL_INSTALL -eq 1 ]]; then
+		sudo_init || return 1
+
+		sudo "$@"
+		return $?
+	fi
+
+	"$@"
+	return $?
+}
+
+
 
 ###############################################################################
 # messaging functions
@@ -90,10 +135,6 @@ clear_screen(){
 	for i in {1..$1}; do
 		echo -n '[A[2K'
 	done
-
-	# echo -n "Press <ENTER>:"
-	# read a
-	# echo -n '[A[2K'
 }
 
 yesno_question(){

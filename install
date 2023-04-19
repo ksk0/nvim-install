@@ -1,7 +1,7 @@
 #!/usr/bin/zsh
 
 SCRIPT_DIR=${0:a:h}
-
+GLOBAL_INSTALL=0
 
 source $SCRIPT_DIR/lib/core
 
@@ -76,14 +76,24 @@ install_packages(){
 }
 
 
-#############################################
-# worker functions
-#
-
 ##############################################################################
 # Show some notifications on end of install
 #
 parse_arguments(){
+
+	############################################################
+	# parse command options 
+	#   -g 
+	#   --global     - install all modulees as global ones
+	#
+	local ARGS
+
+	zparseopts -E -D -A ARGS \
+		g -global
+
+	[[ ${+ARGS[-g]}       -eq 1 ]] && GLOBAL_INSTALL=1
+	[[ ${+ARGS[--global]} -eq 1 ]] && GLOBAL_INSTALL=1
+
 	local commands=(all neovim packages register)
 	local cmd=(${(M)commands:#${1}*})
 
@@ -97,9 +107,12 @@ parse_arguments(){
 }
 
 
-check_if_root
+# check_if_root
 
 parse_arguments $@
+
+# sudo_init
+# exit
 
 $SCRIPT_COMMAND "${SCRIPT_ARGS[@]}"
 

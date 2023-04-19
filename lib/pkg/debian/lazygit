@@ -29,12 +29,16 @@ system_pkg_doinstall_lazygit(){
 	url="https://github.com/jesseduffield/lazygit/releases/latest/download"
 	url="${url}/lazygit_${version}_Linux_x86_64.tar.gz"
 
-	(
-		sudo -v 
-		echo
+	sudo_init || return 1
 
-		cd /usr/local/bin
-		curl -Lo - $url |
-		sudo tar zxf - lazygit
-	)
+	local cwd=$(pwd)
+	cd /usr/local/bin
+
+	curl -Lo - $url |
+	sudo tar zxf - lazygit
+
+	local retval=$?
+
+	cd $cwd
+	return $retval
 }

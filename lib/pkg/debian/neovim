@@ -39,10 +39,10 @@ system_pkg_doinstall_neovim(){
 
 	local mode='oug+rx'
 
-	sudo cp $src_prog $dst_prog || return 1
-	sudo chmod $mode $dst_prog  || return 1
+	sudo_cmd cp $src_prog $dst_prog || return 1
+	sudo_cmd chmod $mode $dst_prog  || return 1
 
-	[[ -L $dst_link ]] || sudo ln -s $dst_prog $dst_link || return 1
+	[[ -L $dst_link ]] || sudo_cmd ln -s $dst_prog $dst_link || return 1
 
 	echo '"neovim" installed!'
 

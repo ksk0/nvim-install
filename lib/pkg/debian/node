@@ -50,17 +50,13 @@ system_pkg_doinstall_nodejs(){
 		uninstalled=1
 	fi
 
-	local errors=$(register_nodejs_org $version)
+	register_nodejs_org $version
 
-	if [[ -n $errors ]]; then
-		{
-			echo "We cant install selected nodejs version ($version) since"
-			echo "this version of operating system is not supported."
-			echo
-			echo "${r}Error message:${n}"
-			echo
-			echo $errors 
-		} | alert_box --par --left --expand --offset 2
+	local retval=$?
+
+	[[ $retval -eq 1 ]] && return 1
+
+	if [[ $retval -eq 2 ]]; then
 		
 		if [[ $uninstalled -eq 1 ]]; then
 			yesno_question "Do you want to reinstall previously removed nodejs [Y/n]:" Y
@@ -331,17 +327,30 @@ register_nodejs_org(){
 	local version=$1
 	local repo=$(system_pkg_version_nodejs repo)
 
-	if [[ $repo != $version ]]; then
-		alert_msg "Registering repo for nodejs version" "$version" >&2
+	[[ $repo = $version ]] && return 0
 
-		local errors=$(
-			curl -fsSL https://deb.nodesource.com/setup_$version |
-			sudo -E bash -  |
-			tee >(cat 1>&2) |
-			grep '## Your distribution.*is not.*supported'
-		)
+	alert_msg "Registering repo for nodejs version" "$version"
+	echo
 
-		[[ -n $errors ]] && echo $errors
+	sudo_init || return 1
 
-	fi
+	local errors=$(
+		curl -fsSL https://deb.nodesource.com/setup_$version |
+		sudo -E bash -  |
+		tee >(cat 1>&2) |
+		grep '## Your distribution.*is not.*supported'
+	)
+
+	[[ -z $errors ]] && return 0
+
+	{
+		echo "We cant install selected nodejs version ($version) since"
+		echo "this version of operating system is not supported."
+		echo
+		echo "${r}Error message:${n}"
+		echo
+		echo $errors 
+	} | alert_box --par --left --expand --offset 2
+
+	return 2
 }

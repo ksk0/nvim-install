@@ -784,7 +784,7 @@ system_pkg_register_app(){
 
 	[[ -z $APP_PATH ]] && return 1
 
-	local registered=$(sudo update-alternatives --list ${link} | grep "^${APP_PATH}$")
+	local registered=$(sudo_cmd update-alternatives --list ${link} | grep "^${APP_PATH}$")
 
 	[[ -n $registered ]] && return
 
@@ -809,8 +809,8 @@ system_pkg_register_app(){
 	[[ ${(L)yesno} != $explicite ]] && [[ $action = N ]] && return
 
 	echo
-	sudo update-alternatives --install /usr/bin/${link} ${link} "${APP_PATH}" 110
-	sudo update-alternatives --set ${link} "${APP_PATH}"
+	sudo_cmd update-alternatives --install /usr/bin/${link} ${link} "${APP_PATH}" 110
+	sudo_cmd update-alternatives --set ${link} "${APP_PATH}"
 
 	return 0
 }
