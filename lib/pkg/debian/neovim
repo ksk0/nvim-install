@@ -44,10 +44,12 @@ system_pkg_doinstall_neovim(){
 
 	[[ -L $dst_link ]] || sudo ln -s $dst_prog $dst_link || return 1
 
- 	system_pkg_register_neovim nvim vi  N
- 	system_pkg_register_neovim nvim vim Y
+	echo '"neovim" installed!'
 
-	echo
+ # 	system_pkg_register_neovim nvim vi  N
+ # 	system_pkg_register_neovim nvim vim Y
+	#
+	# echo
 }
 
 system_pkg_version_neovim(){
@@ -90,7 +92,7 @@ system_pkg_download_neovim(){
 	local url="$NEOVIM_DOWNLOAD_URL/nvim.appimage"
 	local mode='oug+rx'
 
-	curl -sfL -o $prog $url >&2 || return 1
+	curl -sfL -o $prog $url 2>/dev/null || return 1
 	chmod $mode $prog
 
 	return 0
@@ -109,39 +111,3 @@ system_pkg_clean_neovim(){
 	unset NEOVIM_DOWNLOAD_DIR
 }
 
-system_pkg_register_app(){
-	local app=$1
-	local link=$2
-	local action=$3
-	local explicite
-
-	local APP_PATH=$(which $app)
-
-	local registered=$(sudo update-alternatives --list ${link} | grep "^${APP_PATH}$")
-
-	[[ -n $registered ]] && return
-
-	alert_msg "Registering \"$app\" as ${y}${link}${w}"
-
-	echo
-	echo
-	echo -n "[1A"
-	echo -n "Do you want to register \"neovim\" as ${y}${link}${n} "
-
-	if [[ $action = Y ]]; then
-		echo -n "[Y/n]: "
-		explicite="n"
-	else
-		echo -n "[y/N]: "
-		explicite="y"
-	fi
-
-	read yesno
-
-	[[ ${(L)yesno}  = $explicite ]] && [[ $action = Y ]] && return
-	[[ ${(L)yesno} != $explicite ]] && [[ $action = N ]] && return
-
-	echo
-	sudo update-alternatives --install /usr/bin/${link} ${link} "${APP_PATH}" 110
-	sudo update-alternatives --set ${link} "${APP_PATH}"
-}

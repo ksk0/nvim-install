@@ -230,13 +230,13 @@ system_pkg_version_nodejs(){
 
 	if [[ $vtype = web ]] then
 		local current=$(
-			curl -fsSL https://deb.nodesource.com/setup_current.x |
+			curl -fsSL https://deb.nodesource.com/setup_current.x 2>/dev/null|
 			grep 'NODEREPO="' |
 			sed -e 's/NODEREPO="//' -e 's/"//g'  -e 's/node_//'
 		)
 
 		for i in {16..${current%.*}}; do
-			curl -fsSL "https://deb.nodesource.com/setup_${i}.x" |
+			curl -fsSL "https://deb.nodesource.com/setup_${i}.x" 2>/dev/null|
 			grep 'NODEREPO="' |
 			sed -e 's/NODEREPO="//' -e 's/"//g'  -e 's/node_//'
 		done

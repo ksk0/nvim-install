@@ -68,8 +68,6 @@ install_packages(){
 	
 	local MODULES=($core ${${(@k)SELECTED_MODULES}:|core})
 
-	echo "-- before install --"
-
 	local module
 
 	for module in $MODULES; do

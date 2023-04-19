@@ -235,7 +235,7 @@ zpackage(){
 }
 
 
-############################
+#################################
 # core function: install
 #
 pkg_install(){
@@ -454,7 +454,7 @@ pkg_packages_select(){
 }
 
 
-############################
+#################################
 # core function: action
 #
 pkg_action(){
@@ -661,7 +661,7 @@ pkg_action_define(){
 }
 
 
-############################
+#################################
 # core function: version
 #
 pkg_version_newer(){
@@ -724,7 +724,7 @@ pkg_version_normalize(){
 }
 
 
-############################
+#################################
 # core function: count
 #
 pkg_count(){
@@ -771,6 +771,55 @@ pkg_count_fails(){
 }
 
 
+#################################
+# register "app" in alternatives
+#
+system_pkg_register_app(){
+	local app=$1
+	local link=$2
+	local action=$3
+	local explicite
+
+	local APP_PATH=$(which $app | grep -v 'not found')
+
+	[[ -z $APP_PATH ]] && return 1
+
+	local registered=$(sudo update-alternatives --list ${link} | grep "^${APP_PATH}$")
+
+	[[ -n $registered ]] && return
+
+	alert_msg "Registering \"$app\" as ${y}${link}${w}"
+
+	echo
+	echo
+	echo -n "[1A"
+	echo -n "Do you want to register ${y}${app}${n} as ${y}${link}${n} "
+
+	if [[ $action = Y ]]; then
+		echo -n "[Y/n]: "
+		explicite="n"
+	else
+		echo -n "[y/N]: "
+		explicite="y"
+	fi
+
+	read yesno
+
+	[[ ${(L)yesno}  = $explicite ]] && [[ $action = Y ]] && return
+	[[ ${(L)yesno} != $explicite ]] && [[ $action = N ]] && return
+
+	echo
+	sudo update-alternatives --install /usr/bin/${link} ${link} "${APP_PATH}" 110
+	sudo update-alternatives --set ${link} "${APP_PATH}"
+
+	return 0
+}
+
+
+#################################
+# some directory creation
+# functions
+#
 pkg_create_local_dir(){
 	[[ -d $__NVIM_SHARE ]] || mkdir -p $__NVIM_SHARE || return 1
 
