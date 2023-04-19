@@ -86,13 +86,14 @@ perl_pkg_version(){
 	local package=$1
 	local vtype=$2
 
-	if [[ $vtype = "installed" ]]; then
-		local tar_pkg=${package//::/-}
+	local tar_pkg=${package//::/-}
 
-		perl -I $__PERL_LIB -M${package} -e 'print $'${package}'::VERSION . "\n";'
+	if [[ $vtype = "installed" ]]; then
+
+		perl -I $__PERL_LIB -M${package} -e 'print $'${package}'::VERSION . "\n";'  2>/dev/null
 
 	else
-		cpanm --info $package |
+		cpanm --local-lib=$__PERL_HOME --info $package |
 			grep "/${tar_pkg}.*tar.gz" |
 			sed -e "s:.*/${tar_pkg}-::" -e 's:\.tar\.gz$::'
 	fi
@@ -106,11 +107,14 @@ perl_pkg_doinstall(){
 	local has_pkg=$(perl -I $__PERL_LIB -e "use $package" 2>&1)
 
 	cpanm --local-lib=$__PERL_HOME -n $package
+	local retval=$?
 
 	# if "perl5" directory has been created
 	# delete it
 	#
 	[[ -z $has_perl5 ]] && [[ -d ~/perl5 ]] && rm -rf ~/perl5
+
+	return $retval
 }
 
 

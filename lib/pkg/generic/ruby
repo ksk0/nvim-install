@@ -63,6 +63,8 @@ ruby_pkg_setup(){
 	__RUBY_SETUP=1
 
 	pkg_create_modules_dir || return 1
+	pkg_create_ruby_dir    || return 1
+
 	zpackage system install ruby-module || return 1
 
 	__RUBY_SETUP=0

@@ -245,8 +245,6 @@ python_pkg_check_2(){
 # python packages functions
 #
 python_pkg_setup(){
-	return 1
-
 	[[ ${+__PYTHON_SETUP} -eq 1 ]] && return $__PYTHON_SETUP
 
 	__PYTHON_SETUP=1

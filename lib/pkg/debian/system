@@ -1,5 +1,7 @@
 #!/usr/bin/zsh
 
+__ESENTIAL_PACKAGES_OS=()
+
 system_pkg_snapshot(){
 	apt list --installed 2>/dev/null |
 		grep -v 'Listing...' |

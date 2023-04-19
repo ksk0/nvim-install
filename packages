@@ -13,7 +13,7 @@
 [arch]
 [debian]
 [system]
-   unzip tar gzip wget curl git
+   # unzip tar gzip wget curl git
    # lazygit
 
 [python]

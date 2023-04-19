@@ -161,6 +161,7 @@ alert_box(){
 	local border="#"
 	local margine=$__CORE_MARGINE
 	local offset=0
+	local usepar=0
 
 	############################################################
 	# parse command options 
@@ -173,6 +174,7 @@ alert_box(){
 	local ARGS BORDER WIDTH MARGINE OFFSET
 
 	zparseopts -E -D -A ARGS \
+		-par \
 		-left \
 		-right \
 		-center \
@@ -183,6 +185,7 @@ alert_box(){
 		-width:=WIDTH \
 		-border:=BORDER
 
+	[[ ${+ARGS[--par]}     -eq 1 ]] && usepar=1
 	[[ ${+ARGS[--left]}    -eq 1 ]] && align=L
 	[[ ${+ARGS[--right]}   -eq 1 ]] && align=R
 	[[ ${+ARGS[--center]}  -eq 1 ]] && align=C
@@ -206,8 +209,12 @@ alert_box(){
 	mprefix=${(l:${margine}:: :)mprefix}
 
 	local par=($(
-		if hash par 2>/dev/null; then
+		if [[ $usepar -eq 0 ]]; then
+			echo cat
+
+		elif hash par 2>/dev/null; then
 			local text_width
+
 			if [[ $align = C ]]; then
 				text_width=$((width - offset * 2 - 1))
 			else
@@ -220,8 +227,10 @@ alert_box(){
 				J) echo "par -j1 -w${text_width}";;
 				C) echo "cat";;
 			esac
+
 		else
 			echo cat
+
 		fi
 	))
 

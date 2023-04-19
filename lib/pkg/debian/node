@@ -2,7 +2,8 @@
 
 MULTY_VERSION_PACKAGE[nodejs]="YES"
 
-__NODE_MIN_VERSION=18.0
+ __NODE_MIN_VERSION=18.0
+ __NODE_MIN_VERSION=0.0
 
 #############################################
 # GARBAGE
@@ -205,7 +206,7 @@ system_pkg_doinstall_nodejs(){
 			echo "${r}Error message:${n}"
 			echo
 			echo $errors 
-		} | alert_box --left --expand --offset 2
+		} | alert_box --par --left --expand --offset 2
 		
 		if [[ $uninstalled -eq 1 ]]; then
 			yesno_question "Do you want to reinstall previously removed nodejs [Y/n]:" Y
@@ -263,9 +264,10 @@ system_pkg_action_multy_nodejs(){
 	local need_version=${${${(M)1:#*/*}##*/}:-0.0}
 	local store=$2
 
-	[[ -z $need_version ]] && $__NODE_MIN_VERSION
+	[[ -z $need_version    ]] && need_version=$__NODE_MIN_VERSION
+	[[ $need_version = 0.0 ]] && need_version=$__NODE_MIN_VERSION
 
-	alert_msg "Checking [$OS]" nodejs
+	alert_msg "Checking [$OS]" "nodejs $need_version"
 
 
 	############################################################
