@@ -85,6 +85,8 @@ linux_flavour(){
 # messaging functions
 #
 clear_screen(){
+	return
+
 	local i
 
 	for i in {1..$1}; do

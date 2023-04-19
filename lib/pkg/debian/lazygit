@@ -13,6 +13,7 @@ system_pkg_version_lazygit(){
 			;;
 		repo)
 			local url="https://api.github.com/repos/jesseduffield/lazygit"
+
 			url="${url}/releases/latest"
 
 			curl -s $url |
@@ -28,9 +29,10 @@ system_pkg_doinstall_lazygit(){
 	url="https://github.com/jesseduffield/lazygit/releases/latest/download"
 	url="${url}/lazygit_${version}_Linux_x86_64.tar.gz"
 
-	echo URL: $url
-
 	(
+		sudo -v 
+		echo
+
 		cd /usr/local/bin
 		curl -Lo - $url |
 		sudo tar zxf - lazygit

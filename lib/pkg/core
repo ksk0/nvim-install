@@ -18,7 +18,7 @@ typeset -gA __FAILED_PKGS
 typeset -gA MULTY_VERSION_PACKAGE
 
 # __REQUIRED_MODULES=(python node rust)
-__REQUIRED_MODULES=(python)
+__REQUIRED_MODULES=(system)
 
 
 ###############################################################################
@@ -53,6 +53,11 @@ zpackage(){
 	#                 provide this generic package
 	#   install     - install package
 	#   doinstall   - actual installation of package
+	#   clean       - do cleanup tasks after "action"
+	#                 has been define, and no "install"
+	#                 nor "update" has been executed
+	#                 i.e. if you have downloaded something
+	#                 remove it here
 	#   preinstall  - do tasks just before installation
 	#   postinstall - do tasks just before installation
 	#   uninstall   - uninstall package
@@ -145,6 +150,7 @@ zpackage(){
 	local __args=("$@")
 
 	[[ -z $__args ]] && __args=("dummy")
+	[[ $__module = core ]] && __module="system"
 
 	local __core_cmd="pkg_${__action}"
 	local __module_cmd="${__module}_pkg_${__action}"
@@ -229,7 +235,6 @@ zpackage(){
 }
 
 
-
 ############################
 # core function: install
 #
@@ -247,18 +252,29 @@ pkg_install(){
 	echo "-- get action --"
 	zpackage $module action $pkg __todo__
 
+	echo "action: $__todo__"
+
 	if [[ $__todo__ = keep ]] then
 		zpackage $module count success $module $pkg kept
+		zpackage $module clean $pkg
+
 		return 0
 	elif [[ $__todo__ = skipp ]] then
 		zpackage $module count fail $module $pkg skipped
+		zpackage $module clean $pkg
+
 		return 1
 	elif [[ $__todo__ = missing ]] then
 		zpackage $module count fail $module $pkg missing
+		zpackage $module clean $pkg
+
 		return 1
 	elif [[ ${__todo__%%:*} = old ]] then
 		local parts=${(s.:.)__todo__}
+
 		zpackage $module count fail $module $pkg "$parts[2] $parts[3]"
+		zpackage $module clean $pkg
+
 		return 1
 	fi
 
@@ -349,10 +365,14 @@ pkg_packages_load(){
 	local -U system_pkgs=(
 		${=MODULE_PACKAGES[system]}
 		${=MODULE_PACKAGES[$OS]}
-		${__ESENTIAL_PACKAGES}
-		${__ESENTIAL_PACKAGES_OS}
 	)
 
+	local -U core_pkgs=(
+		${__CORE_PACKAGES}
+		${__CORE_PACKAGES_OS}
+	)
+
+	MODULE_PACKAGES[core]=$core_pkgs
 	MODULE_PACKAGES[system]=$system_pkgs
 
 	unset "MODULE_PACKAGES[$OS]"
@@ -363,11 +383,13 @@ pkg_packages_load(){
 pkg_packages_select(){
 	pkg_packages_load
 
-	local -U all_modules=(${${(k)MODULE_PACKAGES}:#system})
+	local ignore=(system core)
+
+	local -U all_modules=(system ${${(k)MODULE_PACKAGES}:|ignore})
 	local -U req_modules=(${__REQUIRED_MODULES:*all_modules})
 
 	all_modules=($req_modules)
-	all_modules+=(${${(k)MODULE_PACKAGES}:#system})
+	all_modules+=(${${(k)MODULE_PACKAGES}:|ignore})
 
 
 	#####################################################
@@ -447,10 +469,8 @@ pkg_action(){
 
 	if [[ -n $MULTY_VERSION_PACKAGE[$__package] ]]; then
 		zpackage $__module action-multy $2 __result__
-		# system_pkg_action_multy  __action $1
 	else
 		zpackage $__module action-single $2 __result__
-		# system_pkg_action_single __action $1
 	fi
 
 	eval "$__store=$__result__"
@@ -614,7 +634,7 @@ pkg_action_define(){
 		echo "Installed: $inst_version"
 		echo "Repo:      $repo_version"
 		echo "Need:      $need_version"
-	} >/dev/null
+	} >&2
 
 	if [[ -z inst_version ]] || [[ $inst_version -eq 0 ]]; then
 		if [[ -z $repo_version ]] || [[ $repo_version -eq 0 ]]; then
@@ -640,7 +660,7 @@ pkg_action_define(){
 
 	echo $action
 
-	clear_screen 3 >/dev/null
+	clear_screen 3 >&2
 }
 
 
@@ -703,7 +723,6 @@ pkg_version_normalize(){
 			print "0.0"
 			next
 		}
-
 	'
 }
 

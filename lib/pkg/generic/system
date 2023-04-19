@@ -4,7 +4,7 @@ __SYSTEM_STATE=$__NVIM_SHARE/.state
 
 typeset -gA SYSTEM_SNAPSHOT
 
-__ESENTIAL_PACKAGES=(par unzip tar gzip wget curl git)
+__CORE_PACKAGES=(par unzip tar gzip wget curl git)
 
 
 #############################################

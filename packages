@@ -13,7 +13,7 @@
 [arch]
 [debian]
 [system]
-   lazygit
+   lazygit clipboard-app
 
 [python]
    pynvim
