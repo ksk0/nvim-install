@@ -9,8 +9,15 @@ system_pkg_install_neovim_app(){
 	NEOVIM_DOWNLOAD_DIR=$(mktemp -d)
 
 	zpackage system install neovim || return 1
-	zpackage system install clipboard-app || return 1
 }
+
+system_pkg_register_neovim_app(){
+ 	system_pkg_register_app nvim vi  N
+ 	system_pkg_register_app nvim vim Y
+
+	echo
+}
+
 
 system_pkg_doinstall_neovim(){
 	local package=$1
@@ -32,10 +39,15 @@ system_pkg_doinstall_neovim(){
 
 	local mode='oug+rx'
 
-	sudo cp $src_prog $dst_prog
-	sudo chmod $mode $dst_prog
+	sudo cp $src_prog $dst_prog || return 1
+	sudo chmod $mode $dst_prog  || return 1
 
-	[[ -L $dst_link ]] || sudo ln -s $dst_prog $dst_link
+	[[ -L $dst_link ]] || sudo ln -s $dst_prog $dst_link || return 1
+
+ 	system_pkg_register_neovim nvim vi  N
+ 	system_pkg_register_neovim nvim vim Y
+
+	echo
 }
 
 system_pkg_version_neovim(){
@@ -97,70 +109,39 @@ system_pkg_clean_neovim(){
 	unset NEOVIM_DOWNLOAD_DIR
 }
 
+system_pkg_register_app(){
+	local app=$1
+	local link=$2
+	local action=$3
+	local explicite
 
-install_neovim(){
-	download_deb_pkg
+	local APP_PATH=$(which $app)
 
- 	register_neovim_app nvim vi  N
- 	register_neovim_app nvim vim Y
+	local registered=$(sudo update-alternatives --list ${link} | grep "^${APP_PATH}$")
+
+	[[ -n $registered ]] && return
+
+	alert_msg "Registering \"$app\" as ${y}${link}${w}"
 
 	echo
-}
-
-download_appimage(){
-	local app=nvim.appimage
-	local url="$NEOVIM_DOWNLOAD_URL/$app"
-	# local dest=/usr/local/bin
-	local dest=/opt/nvim
-	local mode='oug+rx'
-
-	install_deb_package libfuse2
-	install_deb_package curl
-
-	local prog=$dest/nvim.appimage
-
-	[[ -d $dest ]] || sudo mkdir $dest && sudo chmod 755 $dest
-	[[ -f $prog ]] && sudo rm $prog
-
-	alert_msg "Downloading" "neovim appImage"
-	sudo curl -fL -o $prog $url
 	echo
+	echo -n "[1A"
+	echo -n "Do you want to register \"neovim\" as ${y}${link}${n} "
 
-	alert_msg "Installing" "neovim appImage"
-	sudo chmod $mode $prog
-	sudo ln -s $prog /usr/local/bin/nvim 
-}
-
-download_deb_pkg(){
-	local url="$NEOVIM_DOWNLOAD_URL/nvim-linux64.deb"
-	local dest=/tmp
-
-	install_pkg system curl
-
-	local pkg=$dest/nvim-linux64.deb
-
-	alert_msg "Downloading" "neovim deb package"
-	echo
-	sudo curl -fL -o $pkg $url
-	echo
-
-	local inst_version=$(dpkg -l neovim 2>/dev/null | grep '^i' | awk '{print $3}')
-	local repo_version=$(apt show $pkg 2>/dev/null | grep '^Version:' | sed -e 's/Version: //')
-
-	
-	if [[ $inst_version = $repo_version ]]; then
-		alert_box --expand "Newest version of ${r}neovim${y} already installed!"
-		count_action success system neovim kept
-		return
+	if [[ $action = Y ]]; then
+		echo -n "[Y/n]: "
+		explicite="n"
+	else
+		echo -n "[y/N]: "
+		explicite="y"
 	fi
 
-	alert_msg "Installing" "neovim deb package"
+	read yesno
+
+	[[ ${(L)yesno}  = $explicite ]] && [[ $action = Y ]] && return
+	[[ ${(L)yesno} != $explicite ]] && [[ $action = N ]] && return
 
 	echo
-	sudo apt install $pkg
-	local ret_val=$?
-
-	count_action $ret_val system neovim install
-
-	return $ret_val
+	sudo update-alternatives --install /usr/bin/${link} ${link} "${APP_PATH}" 110
+	sudo update-alternatives --set ${link} "${APP_PATH}"
 }

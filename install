@@ -17,6 +17,7 @@ exec_help(){
 
 		   ${y}commands:${n}
 		      neovim     - install latest neovim
+		      register   - register neovim in "alternatives""
 		      packages   - install other programs/modules (nodejs, ruby,
 		                   perl, pynvim, ruby nvim, rust, ...)
 
@@ -39,6 +40,10 @@ exec_neovim(){
 	install_neovim
 }
 
+exec_register(){
+	register_neovim
+}
+
 exec_packages(){
 	install_packages
 }
@@ -48,7 +53,12 @@ exec_packages(){
 # package installation functions
 #
 install_neovim(){
-		zpackage system install neovim-app
+		zpackage system install  neovim-app
+		zpackage system register neovim-app
+}
+
+register_neovim(){
+		zpackage system register neovim-app
 }
 
 install_packages(){
@@ -57,13 +67,12 @@ install_packages(){
 	local core=(core ${SELECTED_MODULES[(i)system]})
 	
 	local MODULES=($core ${${(@k)SELECTED_MODULES}:|core})
-	# local MODULES=(${${(k)SELECTED_MODULES}:#system})
-	# local MODULES=(core system)
+
+	echo "-- before install --"
 
 	local module
 
 	for module in $MODULES; do
-		echo "-- before install --"
 		zpackage $module install ${=MODULE_PACKAGES[$module]}
 	done
 }
@@ -72,121 +81,12 @@ install_packages(){
 #############################################
 # worker functions
 #
-register_neovim_app(){
-	local app=$1
-	local link=$2
-	local action=$3
-	local explicite
-
-	local APP_PATH=$(which $app)
-
-	local registered=$(sudo update-alternatives --list ${link} | grep "^${APP_PATH}$")
-
-	[[ -n $registered ]] && return
-
-	alert_msg "Registering \"$app\" as ${y}${link}${w}"
-
-	echo
-	echo
-	echo -n "[1A"
-	echo -n "Do you want to register \"neovim\" as ${y}${link}${n} "
-
-	if [[ $action = Y ]]; then
-		echo -n "[Y/n]: "
-		explicite="n"
-	else
-		echo -n "[y/N]: "
-		explicite="y"
-	fi
-
-	read yesno
-
-	[[ ${(L)yesno}  = $explicite ]] && [[ $action = Y ]] && return
-	[[ ${(L)yesno} != $explicite ]] && [[ $action = N ]] && return
-
-	echo
-	sudo update-alternatives --install /usr/bin/${link} ${link} "${APP_PATH}" 110
-	sudo update-alternatives --set ${link} "${APP_PATH}"
-}
-
 
 ##############################################################################
 # Show some notifications on end of install
 #
-show_notifications(){
-	local void
-	local txt
-
-	if [[ -z $INSTALLED_PACKAGES ]] && [[ -z $FAILED_PACKAGES ]]; then
-		alert_box --expand "No packagages were installed !!!"
-	fi
-
-	local last_type
-
-	if [[ -n $INSTALLED_PACKAGES ]]; then
-		last_type=""
-
-		{
-			echo "Following packages were installed/upgraded/kept:"
-			echo
-			printf "${n}%-10s %-25s %s\n" "Type" "Package" "Action"
-			echo ${(l:60::-:)txt}
-
-			for package in ${(O)INSTALLED_PACKAGES}; do
-				local parts=("${(s:;:)package}")
-
-				if [[ -n $last_type ]] && [[ $last_type != $parts[1] ]]; then
-					local len=($#last_type $#parts[1])
-					local cnum=${${(On)len}[1]}
-					echo "${s}${(l:$cnum::-:)txt}"
-				fi
-
-				echo -n "${y}${(r:10:)parts[1]}${n} "
-				echo -n "${n}${(r:25:)parts[2]}${n} "
-				echo -n "${b}${parts[3]}${n}"
-				echo
-
-				last_type=$parts[1]
-			done
-
-		} | sed -e 's/^/   /' | alert_box --left --expand
-	fi
-
-	if [[ -n $FAILED_PACKAGES ]]; then
-		last_type=""
-
-		{
-			echo "We failed to install following packages:"
-			echo
-			printf "${n}%-10s %-25s %-25s\n" "Type" "Package" "Reason"
-			echo "${(l:60::-:)void}"
-
-			for pkg in ${(O)FAILED_PACKAGES}; do
-				local parts=("${(s:;:)pkg}")
-
-				if [[ -n $last_type ]] && [[ $last_type != $parts[1] ]]; then
-					local len=($#last_type $#parts[1])
-					local cnum=${${(On)len}[1]}
-					echo "${s}${(l:$cnum::-:)txt}"
-				fi
-
-
-				echo -n "${y}${(r:10:)parts[1]}${n} "
-				echo -n "${n}${(r:25:)parts[2]}${n} "
-				echo -n "${b}${parts[3]}${n}"
-				echo
-
-				last_type=$parts[1]
-			done
-
-			echo
-		} | sed 's/^/   /' | alert_box --expand --left
-	fi
-
-}
-
 parse_arguments(){
-	local commands=(all neovim packages cliboard)
+	local commands=(all neovim packages register)
 	local cmd=(${(M)commands:#${1}*})
 
 	[[ $#cmd -eq 0 ]] && SCRIPT_COMMAND="exec_help"
@@ -198,9 +98,6 @@ parse_arguments(){
 	SCRIPT_ARGS=("$@")
 }
 
-# install_cliboard
-# show_notifications
-# exit
 
 check_if_root
 
@@ -208,4 +105,4 @@ parse_arguments $@
 
 $SCRIPT_COMMAND "${SCRIPT_ARGS[@]}"
 
-show_notifications
+pkg_notifications_show

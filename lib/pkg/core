@@ -249,10 +249,7 @@ pkg_install(){
 		return 1
 	fi
 
-	echo "-- get action --"
 	zpackage $module action $pkg __todo__
-
-	echo "action: $__todo__"
 
 	if [[ $__todo__ = keep ]] then
 		zpackage $module count success $module $pkg kept
@@ -793,3 +790,76 @@ pkg_create_ruby_dir(){
 
 	return 0
 }
+
+pkg_notifications_show(){
+	local void
+	local txt
+
+	if [[ -z $INSTALLED_PACKAGES ]] && [[ -z $FAILED_PACKAGES ]]; then
+		alert_box --expand "No packagages were installed !!!"
+	fi
+
+	local last_type
+
+	if [[ -n $INSTALLED_PACKAGES ]]; then
+		last_type=""
+
+		{
+			echo "Following packages were installed/upgraded/kept:"
+			echo
+			printf "${n}%-10s %-25s %s\n" "Type" "Package" "Action"
+			echo ${(l:60::-:)txt}
+
+			for package in ${(O)INSTALLED_PACKAGES}; do
+				local parts=("${(s:;:)package}")
+
+				if [[ -n $last_type ]] && [[ $last_type != $parts[1] ]]; then
+					local len=($#last_type $#parts[1])
+					local cnum=${${(On)len}[1]}
+					echo "${s}${(l:$cnum::-:)txt}"
+				fi
+
+				echo -n "${y}${(r:10:)parts[1]}${n} "
+				echo -n "${n}${(r:25:)parts[2]}${n} "
+				echo -n "${b}${parts[3]}${n}"
+				echo
+
+				last_type=$parts[1]
+			done
+
+		} | sed -e 's/^/   /' | alert_box --left --expand
+	fi
+
+	if [[ -n $FAILED_PACKAGES ]]; then
+		last_type=""
+
+		{
+			echo "We failed to install following packages:"
+			echo
+			printf "${n}%-10s %-25s %-25s\n" "Type" "Package" "Reason"
+			echo "${(l:60::-:)void}"
+
+			for pkg in ${(O)FAILED_PACKAGES}; do
+				local parts=("${(s:;:)pkg}")
+
+				if [[ -n $last_type ]] && [[ $last_type != $parts[1] ]]; then
+					local len=($#last_type $#parts[1])
+					local cnum=${${(On)len}[1]}
+					echo "${s}${(l:$cnum::-:)txt}"
+				fi
+
+
+				echo -n "${y}${(r:10:)parts[1]}${n} "
+				echo -n "${n}${(r:25:)parts[2]}${n} "
+				echo -n "${b}${parts[3]}${n}"
+				echo
+
+				last_type=$parts[1]
+			done
+
+			echo
+		} | sed 's/^/   /' | alert_box --expand --left
+	fi
+
+}
+
