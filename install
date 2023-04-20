@@ -14,20 +14,24 @@ source $SCRIPT_DIR/lib/core
 exec_help(){
 	cat <<-EOF
 
-		   ${y}usage:${n}
+		   ${by}usage:${n}
 		      ${bw}install ${n}COMMAND
 
-		   ${y}commands:${n}
+		   ${by}commands:${n}
 		      ${bw}neovim          ${n}- install latest neovim
 		      ${bw}register        ${n}- register neovim in "alternatives""
 		      ${bw}packages        ${n}- install other programs/modules (nodejs,
 		      ${bw}                ${n}  ruby, perl, pynvim, ruby nvim,  ...)
-		      ${bw}clipboard       ${n}- install/select new clipboard tool 
-		                        even if one already installed
 
 		      ${bw}all             ${n}- run all the above in single run
 
-		   ${y}options:${n}
+		      ${bw}clipboard       ${n}- install/select new clipboard tool 
+		                        even if one already installed
+		      ${bw}node            ${n}- install/select new version of nodejs
+		                        even if one already installed
+
+
+		   ${by}options:${n}
 		      ${bw}--node          ${n}- check for new versions of nodejs
 		                        online, even if one is installed
 		                        (does nothing on "arch" system)
@@ -35,8 +39,8 @@ exec_help(){
 		      ${bw}--clipbaoard    ${n}- offer selection of of clipboard
 		                        tool even if one is installed
 
-		   ${y}note:${n}
-		      command names can be abbrevated: neo, cli, ...
+		   ${by}note:${n}
+		      command names can be abbrevated: neo, cli, pac, ...
 
 	EOF
 
@@ -61,11 +65,16 @@ exec_packages(){
 }
 
 exec_clipboard(){
-	CLIPOARD_KEEEP_EXISTING=0
+	CLIPBOARD_KEEP_EXISTING=0
 
 	zpackage system install clipboard-app
 }
 
+exec_nodejs(){
+	NODE_KEEP_EXISTING=0
+
+	zpackage system install nodejs
+}
 
 #############################################
 # package installation functions
@@ -135,7 +144,7 @@ parse_arguments(){
 	[[ ${+ARGS[--node]}      -eq 1 ]] && NODE_KEEP_EXISTING=0
 	[[ ${+ARGS[--clipboard]} -eq 1 ]] && CLIPBOARD_KEEP_EXISTING=0
 
-	local commands=(all neovim packages register clipboard)
+	local commands=(all neovim packages register clipboard nodejs)
 	local cmd=(${(M)commands:#${1}*})
 
 	[[ $#cmd -eq 0 ]] && SCRIPT_COMMAND="exec_help"

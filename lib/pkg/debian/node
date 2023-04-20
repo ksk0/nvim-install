@@ -20,8 +20,6 @@ system_pkg_doinstall_nodejs(){
 	local version=${1#*/}
 	local from=${version%-*}
 
-	echo "We are installing/updating ($2) nodejs"
-
 	version=${version#*-}
 
 	if [[ $from = repo ]] then
@@ -46,7 +44,6 @@ system_pkg_doinstall_nodejs(){
 		echo
 
 		zpackage system uninstall  nodejs
-		zpackage system count $? nodejs uninstall || return 1
 
 		uninstalled=1
 	fi
