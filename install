@@ -32,6 +32,9 @@ exec_help(){
 
 
 		   ${by}options:${n}
+		      ${bw}--select        ${n}- manualy select packages you want 
+		                        to install, for each group of
+		                        packages
 		      ${bw}--node          ${n}- check for new versions of nodejs
 		                        online, even if one is installed
 		                        (does nothing on "arch" system)

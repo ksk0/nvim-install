@@ -6,23 +6,40 @@ on **Arch** and/or **debian** based system.
 Clone this repo and run `./install` script. Following help will appear  on
 screen:
 
-```
+```text
 usage:
-   install SELECTION
+  install COMMAND
 
-selection:
-   neovim     - install latest neovim
-   clipboard  - install clipboard interface utility
-   packages   - install packages/modules (nodejs, ruby,
-                perl, pynvim, ruby nvim, rust, ...)
+commands:
+  neovim          - install latest neovim
+  register        - register neovim in "alternatives""
+  packages        - install other programs/modules (nodejs,
+                    ruby, perl, pynvim, ruby nvim,  ...)
 
-   all        - run all the above in single run
+  all             - run all the above in single run
+
+  clipboard       - install/select new clipboard tool 
+                    even if one already installed
+  node            - install/select new version of nodejs
+                    even if one already installed
+
+
+options:
+  --select        - manualy select packages you want 
+                    to install, for each group of
+                    packages
+  --node          - check for new versions of nodejs
+                    online, even if one is installed
+                    (does nothing on "arch" system)
+
+  --clipbaoard    - offer selection of of clipboard
+                    tool even if one is installed
 
 note:
-   command names can be abbreviated: neo, cli, ...
+  command names can be abbrevated: neo, cli, pac, ...
 ```
 
-Issue **install** with one of the given **"selections"**, and guided/automated
+Issue **install** with one of the given **"commands"**, and guided/automated
 process will start.
 
 ### Note:
