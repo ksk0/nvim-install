@@ -206,7 +206,7 @@ alert_msg(){
 	width=$((width - margine))
 
 	[[ -n $object ]] && action="${action}:"
-	
+
 	echo 
 	echo "${mprefix}${g}${(l:$width::#:)void}"
 	echo "${mprefix}${g}# ${w}${action}${y} ${object}${n}"

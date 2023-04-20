@@ -4,6 +4,7 @@ SCRIPT_DIR=${0:a:h}
 
 SCRIPT_DEBUG=0
 GLOBAL_INSTALL=0
+HAND_PICK=0
 
 source $SCRIPT_DIR/lib/core
 
@@ -95,13 +96,26 @@ install_packages(){
 	zpackage system packages-select
 
 	local core=(core ${SELECTED_MODULES[(i)system]})
-	
 	local MODULES=($core ${(o)${(@k)SELECTED_MODULES}:|core})
 
 	local module
+	local packages
 
 	for module in $MODULES; do
-		zpackage $module install ${=MODULE_PACKAGES[$module]}
+		if [[ $HAND_PICK -eq 0 ]] || [[ $module = core ]]; then
+			packages=(${=MODULE_PACKAGES[$module]})
+		else
+			select_packages packages $module
+		fi
+
+		# typeset -p packages
+		# continue
+
+		[[ -z $packages ]] && continue
+
+		for package in $packages; do
+			zpackage $module install $package
+		done
 	done
 
 	download_installer
@@ -113,6 +127,65 @@ download_installer(){
 
 
 ##############################################################################
+# select individual packages
+#
+select_packages(){
+	local __store=$1
+	local __module=$2
+
+	local __packages=(${(o)${=MODULE_PACKAGES[$__module]}})
+
+	eval "$__store=()"
+
+	#####################################################
+	# Create menu
+	#
+	local __menu_prompt=""
+
+	__menu_prompt+="[${g}ENTER: ${n}select] "
+	__menu_prompt+="[${g}CTRL+A: ${n}all] "
+	__menu_prompt+="[${g}CTRL+N: ${n}none]   "
+	__menu_prompt+="[${y}CTRL+O: ${n}end] "
+	__menu_prompt+="[${y}CTRL+C: ${n}quit]"
+
+	alert_msg "Select package(s) to install from group" $__module
+
+	local selection=()
+	local lines=$(($#__packages + 9))
+
+	zmenu select selection\
+		--width 60 \
+		--header "Packages" \
+		--selected-color "b" \
+		--multy \
+		--focus 1 \
+		--color 'g y' \
+		--align "r l" \
+		--spaces "1 2" \
+		--no-bottom-line \
+		--prompt "$__menu_prompt" \
+		$__packages || {clear_screen $lines; return}
+
+	local __selected_packages=()
+
+	if [[ -n $selection ]]; then
+		for i in $selection; do
+			__selected_packages+=(${__packages[$i]})
+		done
+	fi
+
+	clear_screen $lines
+
+	local __replicate=$(
+		typeset -p __selected_packages |
+			sed -e 's/.*__selected_packages=//'
+	)
+
+	eval "$__store=$__replicate"
+}
+
+
+##############################################################################
 # Show some notifications on end of install
 #
 parse_arguments(){
@@ -120,6 +193,7 @@ parse_arguments(){
 	############################################################
 	# parse command options 
 	#
+	#   --select          - hand pick packages to install
 	#   --global -q       - install all modulees as global ones
 	#   --debug  -d       - show some debugging output
 	#   --node   -n       - check for new versions of node
@@ -135,6 +209,7 @@ parse_arguments(){
 		-global \
 		-debug  \
 		-node   \
+		-select \
 		-clipboard
 
 	[[ ${+ARGS[-g]} -eq 1 ]] && GLOBAL_INSTALL=1
@@ -142,6 +217,7 @@ parse_arguments(){
 	[[ ${+ARGS[-n]} -eq 1 ]] && NODE_KEEP_EXISTING=0
 	[[ ${+ARGS[-c]} -eq 1 ]] && CLIPBOARD_KEEP_EXISTING=0
 
+	[[ ${+ARGS[--select]}    -eq 1 ]] && HAND_PICK=1
 	[[ ${+ARGS[--global]}    -eq 1 ]] && GLOBAL_INSTALL=1
 	[[ ${+ARGS[--debug]}     -eq 1 ]] && SCRIPT_DEBUG=1
 	[[ ${+ARGS[--node]}      -eq 1 ]] && NODE_KEEP_EXISTING=0
