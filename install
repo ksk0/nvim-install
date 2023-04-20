@@ -20,6 +20,8 @@ exec_help(){
 		      register   - register neovim in "alternatives""
 		      packages   - install other programs/modules (nodejs, ruby,
 		                   perl, pynvim, ruby nvim, rust, ...)
+					clipboard  - install/select new clipboard tool if
+					             one already installed
 
 		      all        - run all the above in single run
 
@@ -66,13 +68,36 @@ install_packages(){
 
 	local core=(core ${SELECTED_MODULES[(i)system]})
 	
-	local MODULES=($core ${${(@k)SELECTED_MODULES}:|core})
+	local MODULES=($core ${(o)${(@k)SELECTED_MODULES}:|core})
 
 	local module
 
 	for module in $MODULES; do
 		zpackage $module install ${=MODULE_PACKAGES[$module]}
 	done
+
+	download_installer
+}
+
+download_installer(){
+	local dest_dir=$__NVIM_BRICKS/.installer
+	local git_url='https://github.com/ksk0/nvim-install.git'
+
+	[[ -d $dest_dir ]] && rm -rf $dest_dir
+	mkdir -p $dest_dir
+
+	pkg_create_modules_dir || return 1
+
+	alert_msg "Downloading" "nvim-install repo"
+	echo
+
+	GIT_ASKPASS=true git clone --depth 1 $git_url $dest_dir >/dev/null 2>&1 &
+
+	zprogress wait $! "Downloading"
+	local retval=$?
+	echo
+
+	return $retvale
 }
 
 
@@ -110,9 +135,6 @@ parse_arguments(){
 # check_if_root
 
 parse_arguments $@
-
-# sudo_init
-# exit
 
 $SCRIPT_COMMAND "${SCRIPT_ARGS[@]}"
 

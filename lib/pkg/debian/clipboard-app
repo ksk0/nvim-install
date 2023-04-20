@@ -1,68 +1,7 @@
 #!/usr/bin/zsh
 
-MULTY_VERSION_PACKAGE[clipboard-app]="YES"
-
 system_pkg_action_multy_clipboard_app(){
-	local package=$1
-	local store=$2
+	system_pkg_action_multy_clipboard_app_common $@
 
-	local selection
-	local menu_prompt=""
-
-	menu_prompt+="[${g}ENTER: ${n}select] "
-	menu_prompt+="[${y}CTRL+C: ${n}quit]"
-
-	local packages=(
-		"xclip;cliboard support on X11"
-		"xsel;cliboard support on X11"
-		"wl-clipboard;cliboard support on Wayland"
-	)
-
-	local i
-
-	for i in {1..$#packages}; do
-		local pkg=${packages[$i]%;*}
-		local inst_version=$(zpackage system version $pkg installed)
-		local pkg_status=""
-
-		[[ -n $inst_version ]] && [[ $inst_version != 0.0 ]] && pkg_status="(installed)"
-
-		packages[$i]="${packages[i]};$pkg_status"
-	done
-
-	packages+=("")
-	packages+=("None")
-
-	alert_msg "${y}Select cliboard support package"
-
-	zmenu select selection\
-		--width 60 \
-		--header "Pkg;Description;Status" \
-		--selected-color "b" \
-		--focus 1 \
-		--color 'g y n r' \
-		--align "r l l l" \
-		--spaces "1 2 2 2" \
-		--no-bottom-line \
-		--prompt "$menu_prompt" \
-		"${(@)packages}" || {eval "$store=skipp"; return}
-
-	echo
-
-	local selected=${packages[$selection]%%;*}
-
-	if [[ $selected = None ]]; then
-		eval "$store=skipp"
-		return
-	fi
-
-	local inst_version=$(zpackage system version $selected installed)
-	local repo_version=$(zpackage system version $selected repo)
-
-	local action=$(
-		pkg_action_define $selected 0.0 $repo_version $inst_version
-	)
-
-	eval "$store=$action"
+	return $?
 }
-

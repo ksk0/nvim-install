@@ -85,13 +85,12 @@ sudo_init(){
 
 	echo
 	echo
-	echo
 	sudo -p '[2A[2K[sudo] password for %p: ' -v
 
 	local retval=$?
 
 	if [[ $retval -ne 0 ]]; then
-		clear_screen 3
+		clear_screen 2
 
 		{
 			echo
@@ -99,7 +98,7 @@ sudo_init(){
 			echo
 		} >&2
 	else
-		clear_screen 2
+		clear_screen 1
 	fi
 
 	return $retval
@@ -130,6 +129,7 @@ sudo_global(){
 # messaging functions
 #
 clear_screen(){
+	return
 	local i
 
 	for i in {1..$1}; do

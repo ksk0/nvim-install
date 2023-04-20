@@ -206,9 +206,6 @@ system_pkg_upgrade_report(){
 	local footer=$1; shift
 	local packages=("$@")
 
-	echo PACKAGES:  ${packages/#/\\n   }
-	echo
-
 	if [[ $#packages -le 10 ]]; then
 		package_list=("${(@)packages}")
 	else

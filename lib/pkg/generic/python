@@ -13,7 +13,7 @@ python_pkg_setup(){
 
 	pkg_create_modules_dir || return 1
 	zpackage system install python-module || return 1
-	python_pkg_install_venv        || return 1
+	python_pkg_install_venv || return 1
 
 	__PYTHON_SETUP=0
 
@@ -42,7 +42,7 @@ python_pkg_version(){
 	local repo_version
 
 	if [[ -n $inst_version ]]; then
-		repo_version=$(pip3 list -lo | grep -i "^${pkg} " | awk '{print $3}')
+		repo_version=$(pip3 list -lo 2>/dev/null | grep -i "^${pkg} " | awk '{print $3}')
 
 		[[ -n $repo_version ]] && echo $repo_version && return
 	fi

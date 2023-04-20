@@ -386,7 +386,7 @@ pkg_packages_select(){
 	local -U req_modules=(${__REQUIRED_MODULES:*all_modules})
 
 	all_modules=($req_modules)
-	all_modules+=(${${(k)MODULE_PACKAGES}:|ignore})
+	all_modules+=(${(o)${(k)MODULE_PACKAGES}:|ignore})
 
 
 	#####################################################
@@ -840,6 +840,10 @@ pkg_create_ruby_dir(){
 	return 0
 }
 
+
+#################################
+# Show status of install process
+#
 pkg_notifications_show(){
 	local void
 	local txt

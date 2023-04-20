@@ -12,7 +12,7 @@ rust_pkg_setup(){
 
 	__RUST_SETUP=1
 
-	pkg_create_modules_dir
+	pkg_create_modules_dir || return 1
 	zpackage system install rust-module || return 1
 
 	export CARGO_HOME=$__CARGO_HOME

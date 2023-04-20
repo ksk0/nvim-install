@@ -13,12 +13,14 @@ __CORE_PACKAGES=(unzip tar gzip wget curl git)
 system_pkg_setup(){
 	[[ ${+__SYSTEM_SETUP} -eq 1 ]] && return $__SYSTEM_SETUP
 
+	__SYSTEM_SETUP=1
+
+	pkg_create_local_dir || return 1
+	system_pkg_upgrade   || return 1
+
 	__SYSTEM_SETUP=0
 
-	pkg_create_local_dir
-	system_pkg_upgrade || __SYSTEM_SETUP=1
-
-	return $__SYSTEM_SETUP
+	return 0
 }
 
 system_pkg_check(){
