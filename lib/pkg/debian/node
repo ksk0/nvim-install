@@ -3,8 +3,7 @@
 MULTY_VERSION_PACKAGE[nodejs]="YES"
 NODE_KEEP_EXISTING=1
 
-__NODE_MIN_VERSION=16.0
-# __NODE_MIN_VERSION=0.0
+__NODE_MIN_VERSION=18.0
 
 
 #############################################
@@ -123,9 +122,6 @@ system_pkg_action_multy_nodejs(){
 	# installed. Check if package can be kept/upgraded
 	#
 	if [[ $inst_version != 0.0 ]] && [[ $NODE_KEEP_EXISTING -eq 1 ]]; then
-		# echo "Checking already installed version"
-		# echo "Keep existing: $NODE_KEEP_EXISTING"
-
 		local pkg=$package/repo
 
 		local action=$(
@@ -136,13 +132,11 @@ system_pkg_action_multy_nodejs(){
 		local acceptable=(keep update install)
 		local cmd=(${(M)acceptable:#${todo}})
 
-		# echo "ACTION: $action"
-		# echo "TODO:   $todo"
-		# echo "CMD:    $cmd"
-		#
 		if [[ -n $cmd ]]; then
+			echo "Exiting node"
 			eval "$store=$action"
-			clear_screen 4
+			clear_screen 6
+
 			return
 		fi
 
@@ -314,7 +308,7 @@ system_pkg_action_multy_nodejs(){
 
 	zmenu select selection\
 		--width 60 \
-		--selected-color "w" \
+		--selected-color "b" \
 		--selected "$preselected" \
 		--focus 1 \
 		--color 'g y n b' \

@@ -139,11 +139,21 @@ sudo_global(){
 clear_screen(){
 	[[ $SCRIPT_DEBUG -eq 1 ]] && return
 
+	# local ahh
+
+	# echo -n "Press <ENTER> (1): "
+	# read ahh
+	# echo -n '[A[2K'
+
 	local i
 
 	for i in {1..$1}; do
 		echo -n '[A[2K'
 	done
+
+	# echo -n "Press <ENTER> (2): "
+	# read ahh
+	# echo -n '[A[2K'
 }
 
 yesno_question(){

@@ -151,11 +151,6 @@ parse_arguments(){
 
 parse_arguments $@
 
-# zpackage system install nodejs-module
-zpackage system install clipboard-app
-
-exit
-
 $SCRIPT_COMMAND "${SCRIPT_ARGS[@]}"
 
 pkg_notifications_show

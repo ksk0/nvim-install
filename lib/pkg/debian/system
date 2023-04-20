@@ -114,7 +114,6 @@ system_pkg_upgrade(){
 	local modified=0
 
 	if [[ -z $upgradable ]]; then
-		echo
 		alert_box --expand "No package(s) need upgrade !!!"
 
 		return 0
