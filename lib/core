@@ -40,6 +40,14 @@ init_colors(){
 	w='[37m'
 	n='[0m'
 
+	br='[31;1m'
+	bg='[32;1m'
+	by='[33;1m'
+	bb='[34;1m'
+	bm='[35;1m'
+	bc='[36;1m'
+	bw='[37;1m'
+
 	if [[ $(tput colors) -lt 256 ]]; then
 		s='[90m'
 	else

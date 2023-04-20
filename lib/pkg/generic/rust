@@ -37,7 +37,7 @@ rust_pkg_version(){
 			grep "^${package##*::} " |
 			sed -e 's/^.*= "//' -e 's/".*//'
 		
-	fi
+	fi | pkg_version_normalize
 }
 
 rust_pkg_doinstall(){

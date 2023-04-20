@@ -31,7 +31,8 @@ python_pkg_version(){
 	local inst_version=$(
 		pip3 show $pkg 2>/dev/null |
 		grep '^Version:' |
-		awk '{print $2}'
+		awk '{print $2}' |
+		pkg_version_normalize
 	)
 
 	if [[ $vtype = 'installed' ]]; then
@@ -42,7 +43,12 @@ python_pkg_version(){
 	local repo_version
 
 	if [[ -n $inst_version ]]; then
-		repo_version=$(pip3 list -lo 2>/dev/null | grep -i "^${pkg} " | awk '{print $3}')
+		repo_version=$(
+			pip3 list -lo 2>/dev/null |
+			grep -i "^${pkg} " |
+			awk '{print $3}'   |
+			pkg_version_normalize
+		)
 
 		[[ -n $repo_version ]] && echo $repo_version && return
 	fi
@@ -61,11 +67,13 @@ python_pkg_version(){
 		tar --wildcards -O -zxf $package '*/PKG-INFO' |
 			grep '^Version:' |
 			awk '{print $2; exit}'
+
 	elif [[ $package =~ '.whl' ]]; then
 		unzip -c $package '*/METADATA' |
 			grep '^Version: ' |
 			awk '{print $2; exit}'
-	fi
+
+	fi | pkg_version_normalize
 
 
 	cd $cwd

@@ -43,7 +43,7 @@ lua_pkg_version(){
 		sort -V |
 		tail -1
 
-	fi
+	fi | pkg_version_normalize
 
 }
 

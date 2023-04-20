@@ -41,7 +41,8 @@ perl_pkg_version(){
 		cpanm --local-lib=$__PERL_HOME --info $package |
 			grep "/${tar_pkg}.*tar.gz" |
 			sed -e "s:.*/${tar_pkg}-::" -e 's:\.tar\.gz$::'
-	fi
+
+	fi | pkg_version_normalize
 
 }
 

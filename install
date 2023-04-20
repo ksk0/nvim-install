@@ -15,17 +15,25 @@ exec_help(){
 	cat <<-EOF
 
 		   ${y}usage:${n}
-		      install COMMAND
+		      ${bw}install ${n}COMMAND
 
 		   ${y}commands:${n}
-		      neovim     - install latest neovim
-		      register   - register neovim in "alternatives""
-		      packages   - install other programs/modules (nodejs, ruby,
-		                   perl, pynvim, ruby nvim, rust, ...)
-					clipboard  - install/select new clipboard tool if
-					             one already installed
+		      ${bw}neovim          ${n}- install latest neovim
+		      ${bw}register        ${n}- register neovim in "alternatives""
+		      ${bw}packages        ${n}- install other programs/modules (nodejs,
+		      ${bw}                ${n}  ruby, perl, pynvim, ruby nvim,  ...)
+		      ${bw}clipboard       ${n}- install/select new clipboard tool 
+		                        even if one already installed
 
-		      all        - run all the above in single run
+		      ${bw}all             ${n}- run all the above in single run
+
+		   ${y}options:${n}
+		      ${bw}--node          ${n}- check for new versions of nodejs
+		                        online, even if one is installed
+		                        (does nothing on "arch" system)
+
+		      ${bw}--clipbaoard    ${n}- offer selection of of clipboard
+		                        tool even if one is installed
 
 		   ${y}note:${n}
 		      command names can be abbrevated: neo, cli, ...
@@ -100,18 +108,32 @@ parse_arguments(){
 	############################################################
 	# parse command options 
 	#
-	#   --global -q    - install all modulees as global ones
-	#   --debug  -d    - show some debugging output
+	#   --global -q       - install all modulees as global ones
+	#   --debug  -d       - show some debugging output
+	#   --node   -n       - check for new versions of node
+	#                       online, even if one is installed
+	#   --clipbaoard -c   - offer selection of of clipboard
+	#                       tool even if one is installed
+	#                
 	#
 	local ARGS
 
 	zparseopts -E -D -A ARGS \
-		g d -global -debug
+		g d n c \
+		-global \
+		-debug  \
+		-node   \
+		-clipboard
 
-	[[ ${+ARGS[-g]}       -eq 1 ]] && GLOBAL_INSTALL=1
-	[[ ${+ARGS[--global]} -eq 1 ]] && GLOBAL_INSTALL=1
-	[[ ${+ARGS[-d]}       -eq 1 ]] && SCRIPT_DEBUG=1
-	[[ ${+ARGS[--debug]}  -eq 1 ]] && SCRIPT_DEBUG=1
+	[[ ${+ARGS[-g]} -eq 1 ]] && GLOBAL_INSTALL=1
+	[[ ${+ARGS[-d]} -eq 1 ]] && SCRIPT_DEBUG=1
+	[[ ${+ARGS[-n]} -eq 1 ]] && NODE_KEEP_EXISTING=0
+	[[ ${+ARGS[-c]} -eq 1 ]] && CLIPBOARD_KEEP_EXISTING=0
+
+	[[ ${+ARGS[--global]}    -eq 1 ]] && GLOBAL_INSTALL=1
+	[[ ${+ARGS[--debug]}     -eq 1 ]] && SCRIPT_DEBUG=1
+	[[ ${+ARGS[--node]}      -eq 1 ]] && NODE_KEEP_EXISTING=0
+	[[ ${+ARGS[--clipboard]} -eq 1 ]] && CLIPBOARD_KEEP_EXISTING=0
 
 	local commands=(all neovim packages register clipboard)
 	local cmd=(${(M)commands:#${1}*})
@@ -125,11 +147,14 @@ parse_arguments(){
 	SCRIPT_ARGS=("$@")
 }
 
-# system_pkg_version_nvim_installer nvim-installer installed
-# system_pkg_version_nvim_installer nvim-installer repo
 # check_if_root
 
 parse_arguments $@
+
+# zpackage system install nodejs-module
+zpackage system install clipboard-app
+
+exit
 
 $SCRIPT_COMMAND "${SCRIPT_ARGS[@]}"
 

@@ -35,7 +35,7 @@ node_pkg_version(){
 	else
 		npm view ${package} version 2>/dev/null
 
-	fi
+	fi | pkg_version_normalize
 }
 
 node_pkg_doinstall(){

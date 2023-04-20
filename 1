@@ -3,8 +3,7 @@
 MULTY_VERSION_PACKAGE[nodejs]="YES"
 NODE_KEEP_EXISTING=1
 
-__NODE_MIN_VERSION=16.0
-# __NODE_MIN_VERSION=0.0
+ __NODE_MIN_VERSION=18.0
 
 
 #############################################
@@ -21,8 +20,6 @@ system_pkg_doinstall_nodejs(){
 	local version=${1#*/}
 	local from=${version%-*}
 
-	echo "We are installing/updating ($2) nodejs"
-
 	version=${version#*-}
 
 	if [[ $from = repo ]] then
@@ -31,6 +28,8 @@ system_pkg_doinstall_nodejs(){
 	fi
 
 	local inst_version=$(zpackage system version nodejs installed)
+	inst_version=$(pkg_version_normalize $inst_version)
+
 	local uninstalled=0
 
 	if [[ $inst_version -gt 0 ]]; then
@@ -108,45 +107,15 @@ system_pkg_action_multy_nodejs(){
 	[[ $need_version = 0.0 ]] && need_version=$__NODE_MIN_VERSION
 
 	alert_msg "Checking [$OS]" "nodejs $need_version"
-	echo
 
 
 	############################################################
-	# Get local repo version and already installed version.
+	# get local repo version, already installed version and
+	# versions available from "nodej.org" web site.
 	#
 	local repo_version=$(zpackage system version nodejs repo)
 	local inst_version=$(zpackage system version nodejs installed)
-
-
-	############################################################
-	# If "keep_existing" flag is on, and something is already
-	# installed. Check if package can be kept/upgraded
-	#
-	if [[ $inst_version != 0.0 ]] && [[ $NODE_KEEP_EXISTING -eq 1 ]]; then
-		# echo "Checking already installed version"
-		# echo "Keep existing: $NODE_KEEP_EXISTING"
-
-		local pkg=$package/repo
-
-		local action=$(
-			pkg_action_define $pkg $need_version $repo_version $inst_version
-		)
-
-		local todo=${action%%:*}
-		local acceptable=(keep update install)
-		local cmd=(${(M)acceptable:#${todo}})
-
-		# echo "ACTION: $action"
-		# echo "TODO:   $todo"
-		# echo "CMD:    $cmd"
-		#
-		if [[ -n $cmd ]]; then
-			eval "$store=$action"
-			clear_screen 4
-			return
-		fi
-
-	fi
+	local web_versions=($(zpackage system version nodejs web))
 
 
 	############################################################
@@ -164,6 +133,13 @@ system_pkg_action_multy_nodejs(){
 
 	[[ -z $repo_source ]] && repo_source=$DISTRO
 
+	{
+		echo "NEED VERSION: $need_version"
+		echo "REPO VERSION: $repo_version"
+		echo "INST VERSION: $inst_version"
+		echo "WEB  VERSION: $web_versions"
+	} >/dev/null
+
 
 	############################################################
 	# Collect versions of "nodejs.org" web, which are higher
@@ -174,7 +150,6 @@ system_pkg_action_multy_nodejs(){
 	# be one from "OS" repositorie or from "nodejs.org" since
 	# later could be added to the list of repositories. See above.
 	#
-	local web_versions=($(zpackage system version nodejs web))
 	local remote_versions=()
 	local pkg_version
 
@@ -187,16 +162,6 @@ system_pkg_action_multy_nodejs(){
 		fi
 	done
 
-	clear_screen 4
-
-	{
-		echo "NEED VERSION: $need_version"
-		echo "REPO VERSION: $repo_version"
-		echo "INST VERSION: $inst_version"
-		echo "WEB  VERSION: $web_versions"
-	} >&2
-
-
 
 	############################################################
 	# Create a list of provided versions. Only add those which
@@ -204,8 +169,6 @@ system_pkg_action_multy_nodejs(){
 	#
 	local provided=()
 
-	# check if we should add repo version
-	#
 	if
 		pkg_version_newer $repo_version $need_version &&
 		pkg_version_newer $repo_version $inst_version
@@ -217,9 +180,6 @@ system_pkg_action_multy_nodejs(){
 		fi
 	fi
 
-	# add all remote versions (which
-	# are already preselected)
-	#
 	for pkg_version in $remote_versions; do
 		provided+=("web;nodejs.org;${pkg_version}")
 	done

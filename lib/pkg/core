@@ -486,9 +486,6 @@ pkg_action_single(){
 	local repo_version=$(zpackage $module version $package repo)
 	local need_version=${(j:.:)${(@s:.:)version}[1,2]}
 
-	inst_version=$(pkg_version_normalize $inst_version)
-	repo_version=$(pkg_version_normalize $repo_version)
-
 	local action=$(
 		pkg_action_define $package $need_version $repo_version $inst_version
 	)
@@ -627,24 +624,19 @@ pkg_action_define(){
 	local inst_version=$4
 	local action
 
-	{
-		echo "Installed: $inst_version"
-		echo "Repo:      $repo_version"
-		echo "Need:      $need_version"
-	} >&2
+	if [[ $repo_version -eq 0 ]]; then
+		action=missing
 
-	if [[ -z inst_version ]] || [[ $inst_version -eq 0 ]]; then
-		if [[ -z $repo_version ]] || [[ $repo_version -eq 0 ]]; then
-			action=missing
-		elif ! pkg_version_newer $repo_version $need_version; then
+	elif [[ $inst_version -eq 0 ]]; then
+		if ! pkg_version_newer $repo_version $need_version; then
 			action=old:$repo_version:$need_version
 		else
 			action=install:$package
 		fi
 
 	else
-		if [[ -z $repo_version ]]; then
-			action=keep
+		if ! pkg_version_newer $repo_version $need_version; then
+			action=old:$repo_version:$need_version
 		elif [[ $inst_version = $repo_version ]]; then
 			action=keep
 		elif ! pkg_version_newer $repo_version $inst_version; then
@@ -655,9 +647,17 @@ pkg_action_define(){
 
 	fi
 
+	{
+		echo "Installed: $inst_version"
+		echo "Repo:      $repo_version"
+		echo "Need:      $need_version"
+		echo "Action:    $action"
+	} >&2
+
+
 	echo $action
 
-	clear_screen 3 >&2
+	clear_screen 4 >&2
 }
 
 
@@ -677,50 +677,56 @@ pkg_version_newer(){
 }
 
 pkg_version_normalize(){
-	echo $1 | awk '
-		/^[0-9]+\.[0-9]+.*/{
-			split($1,parts,"\\.")
-			# printf("%-25s %-20s A:%d.%d\n",$1, $2, parts[1], parts[2])
+	local version=$(
+		awk '
+			/^[0-9]+\.[0-9]+.*/{
+				split($1,parts,"\\.")
+				# printf("%-25s %-20s A:%d.%d\n",$1, $2, parts[1], parts[2])
 
-			printf("%d.%d\n", parts[1], parts[2])
-			next
-		}
+				printf("%d.%d\n", parts[1], parts[2])
+				next
+			}
 
-		/^[0-9]+[.:][0-9]+\.[0-9]+.*/{
-			split($1,parts,"[.:]")
-			# printf("%-25s %-20s B:%d.%d\n",$1, $2, parts[1] * 100 + parts[2], parts[3])
+			/^[0-9]+[.:][0-9]+\.[0-9]+.*/{
+				split($1,parts,"[.:]")
+				# printf("%-25s %-20s B:%d.%d\n",$1, $2, parts[1] * 100 + parts[2], parts[3])
 
-			printf("%d.%d\n", parts[1] * 100 + parts[2], parts[3])
-			next
-		}
+				printf("%d.%d\n", parts[1] * 100 + parts[2], parts[3])
+				next
+			}
 
-		/^[0-9]+[.:][0-9]+.*/{
-			split($1,parts,"[.:]")
-			# printf("%-25s %-20s C:%d.%d\n",$1, $2, parts[1], parts[2])
+			/^[0-9]+[.:][0-9]+.*/{
+				split($1,parts,"[.:]")
+				# printf("%-25s %-20s C:%d.%d\n",$1, $2, parts[1], parts[2])
 
-			printf("%d.%d\n", parts[1], parts[2])
-			next
-		}
+				printf("%d.%d\n", parts[1], parts[2])
+				next
+			}
 
-		/^[0-9]+-[0-9]+.*/{
-			split($1,parts,"-")
-			# printf("%-25s %-20s D:%d.%d\n",$1, $2, parts[1], parts[2])
+			/^[0-9]+-[0-9]+.*/{
+				split($1,parts,"-")
+				# printf("%-25s %-20s D:%d.%d\n",$1, $2, parts[1], parts[2])
 
-			printf("%d.%d\n", parts[1], parts[2])
-			next
-		}
+				printf("%d.%d\n", parts[1], parts[2])
+				next
+			}
 
-		/^[0-9]+$/{
-			# printf("%-25s %-20s E:%d.%d\n",$1, $2, $2, 0)
-			printf("%d.00\n", $1)
-			next
-		}
+			/^[0-9]+$/{
+				# printf("%-25s %-20s E:%d.%d\n",$1, $2, $2, 0)
+				printf("%d.00\n", $1)
+				next
+			}
 
-		{
-			print "0.0"
-			next
-		}
-	'
+			{
+				print "0.0"
+				next
+			}
+		'
+	)
+
+	[[ -z $version ]] && version="0.0"
+
+	echo $version
 }
 
 

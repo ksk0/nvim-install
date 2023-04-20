@@ -4,23 +4,22 @@ system_pkg_version_lazygit(){
 	local pkg=$1
 	local vtype=$2
 
-	case $vtype in
-		installed)
-			lazygit --version 2>/dev/null |
-				sed -e 's/, /\n/g' |
-				grep '^version=' |
-				sed -e 's/version=//'
-			;;
-		repo)
-			local url="https://api.github.com/repos/jesseduffield/lazygit"
+	if [[ $vtype = installed ]]; then
+		lazygit --version 2>/dev/null |
+			sed -e 's/, /\n/g' |
+			grep '^version=' |
+			sed -e 's/version=//'
 
-			url="${url}/releases/latest"
+	else
+		local url="https://api.github.com/repos/jesseduffield/lazygit"
 
-			curl -s $url |
-				grep '"tag_name":' |
-				sed -E 's/.*"v*([^"]+)".*/\1/'
-			;;
-	esac
+		url="${url}/releases/latest"
+
+		curl -s $url |
+			grep '"tag_name":' |
+			sed -E 's/.*"v*([^"]+)".*/\1/'
+
+	fi | pkg_version_normalize
 }
 
 system_pkg_doinstall_lazygit(){

@@ -1,7 +1,7 @@
 #!/usr/bin/zsh
 
 MULTY_VERSION_PACKAGE[clipboard-app]="YES"
-CLIPOARD_KEEEP_EXISTING=1
+CLIPBOARD_KEEP_EXISTING=1
 
 system_pkg_action_multy_clipboard_app_common(){
 	local package=$1
@@ -72,7 +72,7 @@ system_pkg_action_multy_clipboard_app_common(){
 clibpoard_keep_existing(){
 	local store=$1
 
-	[[ $CLIPOARD_KEEEP_EXISTING -eq 0 ]] && return 1
+	[[ $CLIPBOARD_KEEP_EXISTING -eq 0 ]] && return 1
 
 	local clibpoards=(xclip xsel wl-clipboard)
 	local inst_version
@@ -82,24 +82,27 @@ clibpoard_keep_existing(){
 	echo
 
 	for clip in $clibpoards; do
-
 		local inst_version=$(zpackage system version $clip installed)
 
 		[[ $inst_version != 0.0 ]] && break
 	done
 
-	clear_screen 4
+	local result=1
 
-	[[ $inst_version = 0.0 ]] || [[ -z $inst_version ]]&& return 1
+	if [[ -n $inst_version ]] && [[ $inst_version != 0.0 ]]; then
+		local repo_version=$(zpackage system version $clip repo)
 
-	local repo_version=$(zpackage system version $clip repo)
+		local action=$(
+			pkg_action_define $clip 0.0 $repo_version $inst_version
+		)
 
-	local action=$(
-		pkg_action_define $clip 0.0 $repo_version $inst_version
-	)
+		eval "$store=$action"
 
-	eval "$store=$action"
+		result=0
+	fi
 
-	return 0
+	clear_screen 5
+
+	return $result
 }
 
