@@ -1,6 +1,8 @@
 #!/usr/bin/zsh
 
 SCRIPT_DIR=${0:a:h}
+
+SCRIPT_DEBUG=0
 GLOBAL_INSTALL=0
 
 source $SCRIPT_DIR/lib/core
@@ -50,6 +52,12 @@ exec_packages(){
 	install_packages
 }
 
+exec_clipboard(){
+	CLIPOARD_KEEEP_EXISTING=0
+
+	zpackage system install clipboard-app
+}
+
 
 #############################################
 # package installation functions
@@ -80,24 +88,7 @@ install_packages(){
 }
 
 download_installer(){
-	local dest_dir=$__NVIM_BRICKS/.installer
-	local git_url='https://github.com/ksk0/nvim-install.git'
-
-	[[ -d $dest_dir ]] && rm -rf $dest_dir
-	mkdir -p $dest_dir
-
-	pkg_create_modules_dir || return 1
-
-	alert_msg "Downloading" "nvim-install repo"
-	echo
-
-	GIT_ASKPASS=true git clone --depth 1 $git_url $dest_dir >/dev/null 2>&1 &
-
-	zprogress wait $! "Downloading"
-	local retval=$?
-	echo
-
-	return $retvale
+	zpackage system install nvim-installer
 }
 
 
@@ -108,18 +99,21 @@ parse_arguments(){
 
 	############################################################
 	# parse command options 
-	#   -g 
-	#   --global     - install all modulees as global ones
+	#
+	#   --global -q    - install all modulees as global ones
+	#   --debug  -d    - show some debugging output
 	#
 	local ARGS
 
 	zparseopts -E -D -A ARGS \
-		g -global
+		g d -global -debug
 
 	[[ ${+ARGS[-g]}       -eq 1 ]] && GLOBAL_INSTALL=1
 	[[ ${+ARGS[--global]} -eq 1 ]] && GLOBAL_INSTALL=1
+	[[ ${+ARGS[-d]}       -eq 1 ]] && SCRIPT_DEBUG=1
+	[[ ${+ARGS[--debug]}  -eq 1 ]] && SCRIPT_DEBUG=1
 
-	local commands=(all neovim packages register)
+	local commands=(all neovim packages register clipboard)
 	local cmd=(${(M)commands:#${1}*})
 
 	[[ $#cmd -eq 0 ]] && SCRIPT_COMMAND="exec_help"
@@ -131,7 +125,8 @@ parse_arguments(){
 	SCRIPT_ARGS=("$@")
 }
 
-
+# system_pkg_version_nvim_installer nvim-installer installed
+# system_pkg_version_nvim_installer nvim-installer repo
 # check_if_root
 
 parse_arguments $@

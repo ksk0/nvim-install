@@ -129,7 +129,8 @@ sudo_global(){
 # messaging functions
 #
 clear_screen(){
-	return
+	[[ $SCRIPT_DEBUG -eq 1 ]] && return
+
 	local i
 
 	for i in {1..$1}; do

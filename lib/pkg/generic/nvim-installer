@@ -1,0 +1,66 @@
+#!/usr/bin/zsh
+
+system_pkg_doinstall_nvim_installer(){
+	local dest_dir=$__NVIM_BRICKS/.installer
+	local git_url='https://github.com/ksk0/nvim-install.git'
+
+	[[ -d $dest_dir ]] && rm -rf $dest_dir
+	mkdir -p $dest_dir
+
+	pkg_create_modules_dir || return 1
+
+	GIT_ASKPASS=true git clone --depth 1 $git_url $dest_dir >/dev/null 2>&1 &
+
+	zprogress wait $! "Downloading"
+	local retval=$?
+	echo
+
+	return $retvale
+}
+
+
+system_pkg_version_nvim_installer(){
+	local pkg=$1
+	local vtype=$2
+
+	local dest_dir=$__NVIM_BRICKS/.installer
+
+	local script_project=$(
+		cd $SCRIPT_DIR
+		git config --local remote.origin.url |
+		sed -E -e 's:^.+github.com.::'
+	)
+
+	local stored_project=$(
+		if [[ -e $dest_dir ]] then
+			cd $dest_dir
+			git config --local remote.origin.url |
+				sed -E -e 's:^.+github.com.::'
+		fi
+	)
+
+	local inst_version=0.0
+
+	[[ $stored_project = $script_project ]] && inst_version=1.0
+
+	if [[ $vtype = installed ]]; then
+		echo $inst_version
+
+	else
+		if [[ $inst_version = 0.0 ]]; then
+			echo "1.0"
+			return
+		fi
+
+		local need_update=$(
+			cd $dest_dir
+			git fetch --dry-run 2>/dev/null
+		)
+
+		if [[ -z $need_update ]]; then
+			echo $inst_version
+		else
+			echo "2.0"
+		fi
+	fi
+}
