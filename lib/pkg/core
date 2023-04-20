@@ -922,3 +922,36 @@ pkg_notifications_show(){
 
 }
 
+pkg_upgrade_report(){
+	local header=$1; shift
+	local footer=$1; shift
+	local packages=("$@")
+
+	if [[ $#packages -le 10 ]]; then
+		package_list=("${(@)packages}")
+	else
+		local extra_pkgs=$(($#packages - 10))
+		package_list=("${(@)packages[1,10]}")
+		package_list+=("...")
+		package_list+=("${y}and $extra_pkgs more !!!${n}")
+	fi
+
+	local len=$#header
+
+	{
+		echo "$header"
+		echo ${(l:$len::-:)void}
+
+		# for package in $package_list; do
+		echo ${(j:\n:)${(@)package_list/#/${n}}}
+		# done
+
+		if [[ -n $footer ]]; then
+			echo
+			echo $footer
+		fi
+
+	}  | alert_box --left --offset 3 --expand
+}
+
+

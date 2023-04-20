@@ -71,28 +71,9 @@ system_pkg_upgrade(){
 		return
 	fi
 
-	local upgradable_list=()
-
-	echo NO PACKAGES:$#upgradable
-
-	if [[ $#upgradable -le 10 ]]; then
-		upgradable_list=("${(@)upgradable}")
-	else
-		local extra_pkgs=$(($#upgradable - 10))
-		upgradable_list=("${(@)upgradable[1,10]}")
-		upgradable_list+=("...")
-		upgradable_list+=("${y}and $extra_pkgs more !!!${n}")
-	fi
-
-	{
-		echo "There are package(s) that need upgrade:"
-		echo "-----------------------------------------"
-
-		for package in $upgradable_list; do
-			echo "${n}$package"
-		done
-
-	}  | alert_box --left --offset 3 --expand
+	pkg_upgrade_report \
+		"There are package(s) that need upgrade:" \
+		"" "${(@)upgradable}"
 
 
 	echo
