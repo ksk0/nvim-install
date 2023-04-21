@@ -6,11 +6,9 @@ on **Arch** and/or **debian** based system.
 
 Below demo shows instalation of all packags which include: lazygit from web, nvim.appimage from web, selection of clipboard tool, and skipping of installaiton of nodejs, resulting in error (reported at end).
 
-![install all](https://user-images.githubusercontent.com/54402884/233641726-84183d85-d9c7-4c8f-bf04-03de1d97c5be.mp4)
+https://user-images.githubusercontent.com/54402884/233641726-84183d85-d9c7-4c8f-bf04-03de1d97c5be.mp4
 
-
-![install node](https://user-images.githubusercontent.com/54402884/233641962-b0b9685f-b86a-4e9e-886a-cfdc6516b09c.mp4)
-
+https://user-images.githubusercontent.com/54402884/233641962-b0b9685f-b86a-4e9e-886a-cfdc6516b09c.mp4
 
 
 # Installation
