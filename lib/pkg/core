@@ -245,7 +245,7 @@ pkg_install(){
 	local __todo__
 
 	if ! zpackage $module setup; then
-		zpackage $module count fail $module $package "$module not set up"
+		zpackage $module count fail $module $package "$module not setup"
 		return 1
 	fi
 
