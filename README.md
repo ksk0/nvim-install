@@ -1,8 +1,19 @@
-## nvim-install
+# nvim-install
 Script for automated installation of nvim and accompanying packages and modules
 on **Arch** and/or **debian** based system.
 
-## Installation
+# Demo
+
+Below demo shows instalation of all packags which include: lazygit from web, nvim.appimage from web, selection of clipboard tool, and skipping of installaiton of nodejs, resulting in error (reported at end).
+
+https://user-images.githubusercontent.com/54402884/233641726-84183d85-d9c7-4c8f-bf04-03de1d97c5be.mp4
+
+
+https://user-images.githubusercontent.com/54402884/233641962-b0b9685f-b86a-4e9e-886a-cfdc6516b09c.mp4
+
+
+
+# Installation
 Clone this repo and run `./install` script. Following help will appear  on
 screen:
 
@@ -62,7 +73,7 @@ $HOME/.local/share/neovim/bricks
 To be able to use them, [**nvim-bricks**][1] plugin should be installed.
 
 
-## Why and how
+# Why and how
 To speed up and automate installation of all necessary programs/modules this
 script was created. Since **debian** based distros, have fairly old packages
 (like **nodejs** and **nvim** itself), this script also allow download of latest
@@ -105,17 +116,17 @@ have to be installed. Which one, depends on language/servers you are using.
 If you don't use any, or the one you use do not depend on programs installed
 with this script, you probably have no use from this script.
 
-### Rust:
+## Rust:
 Packages: **fd-find** and **ripgrep** are needed by
 [**telescope.nvim**][2] plugin,
 if you don't use this plugin, you should not install this packages.
 
-### Node:
+## Node:
 On **Arch** system, **tree-sitter** installs  with **neovim**, thus you can
 exclude **tree-sitter-cli** package
 
 
-## Issues 
+# Issues 
 If you have any issues or comments, please be free to open an issue.
 
 
