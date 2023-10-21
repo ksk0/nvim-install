@@ -33,7 +33,9 @@ rust_pkg_version(){
 			sed -e 's/:$//' -e 's/^v//'
 	
 	else
-		cargo search -q ${package##*::} |
+		# cargo search -q ${package##*::} |
+		cargo search ${package##*::} |
+			tee >(cat 1>&2) |
 			grep "^${package##*::} " |
 			sed -e 's/^.*= "//' -e 's/".*//'
 		
