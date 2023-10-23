@@ -71,6 +71,15 @@ system_pkg_version_rust(){
 system_pkg_doinstall_rust(){
 	local rustup=$(which rustup)
 
+	if [[ $rustup = $__CARGO_BIN/rustup ]]; then
+		rustup update
+		return 0
+	else
+		curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+			sh -s -- -y --no-modify-path
+		return $?
+	fi
+}
 
 
 #############################################
